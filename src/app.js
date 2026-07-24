@@ -14,9 +14,16 @@ const app = express();
 
 app.set('trust proxy', 1);
 
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
 
-const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+const allowedOrigins = (
+  process.env.CLIENT_URL ||
+  'http://localhost:5173,https://www.kartikemi.com,https://kartikemi.com'
+)
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -27,7 +34,7 @@ app.use(
       if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
         return callback(null, true);
       }
-      return callback(new Error(`CORS blocked for origin: ${origin}`));
+      return callback(null, false);
     },
     credentials: true,
   })
