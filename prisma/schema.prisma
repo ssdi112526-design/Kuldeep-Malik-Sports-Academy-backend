@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  user
+}
+
+enum ContactStatus {
+  new
+  in_progress
+  resolved
+  closed
+}
+
+enum CoverageStatus {
+  Active
+  Growing
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(100)
+  email     String   @unique @db.VarChar(255)
+  password  String
+  role      UserRole @default(user)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Contact {
+  id              String        @id @default(uuid())
+  fullName        String        @map("full_name") @db.VarChar(120)
+  email           String        @db.VarChar(255)
+  phone           String?       @db.VarChar(20)
+  organisation    String?       @db.VarChar(150)
+  serviceRequired String        @map("service_required")
+  message         String        @db.VarChar(2000)
+  status          ContactStatus @default(new)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@index([email, createdAt])
+  @@index([status])
+  @@index([createdAt])
+  @@map("contacts")
+}
+
+model Service {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  icon        String   @default("FaCar")
+  slug        String   @unique
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([order, isActive])
+  @@map("services")
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  icon        String   @default("FaCar")
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([order])
+  @@map("products")
+}
+
+model Partner {
+  id        String   @id @default(uuid())
+  name      String
+  type      String
+  status    String   @default("Active Partner")
+  badge     String   @default("")
+  order     Int      @default(0)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([order, type])
+  @@map("partners")
+}
+
+model TeamMember {
+  id          String   @id @default(uuid())
+  role        String
+  experience  String
+  description String
+  icon        String   @default("FaUserTie")
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("team_members")
+}
+
+model FAQ {
+  id        String   @id @default(uuid())
+  question  String
+  answer    String
+  order     Int      @default(0)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([order])
+  @@map("faqs")
+}
+
+model Equipment {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  icon        String   @default("FaTools")
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("equipment")
+}
+
+model CoverageArea {
+  id        String         @id @default(uuid())
+  state     String
+  city      String
+  status    CoverageStatus @default(Active)
+  isHQ      Boolean        @default(false) @map("is_hq")
+  order     Int            @default(0)
+  isActive  Boolean        @default(true) @map("is_active")
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  @@index([order, state])
+  @@map("coverage_areas")
+}
