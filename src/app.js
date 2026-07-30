@@ -9,6 +9,7 @@ import contactRoutes from './routes/contactRoutes.js';
 import contentRoutes from './routes/contentRoutes.js';
 import cmsRoutes from './routes/cmsRoutes.js';
 import entryRoutes from './routes/entryRoutes.js';
+import uploadSyncRoutes from './routes/uploadSyncRoutes.js';
 import indexRoutes from './routes/index.js';
 import errorHandler, { notFound } from './middleware/errorHandler.js';
 import { UPLOADS_DIR } from './middleware/upload.js';
@@ -54,6 +55,7 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api', cmsRoutes);
 app.use('/api', entryRoutes);
+app.use('/api', uploadSyncRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
