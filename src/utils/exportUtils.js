@@ -6,8 +6,8 @@ export const EXPORT_COLUMNS = [
   { key: 'fullName', label: 'Name' },
   { key: 'email', label: 'Email' },
   { key: 'phone', label: 'Phone' },
-  { key: 'organisation', label: 'Company' },
-  { key: 'serviceRequired', label: 'Service' },
+  { key: 'panNumber', label: 'PAN' },
+  { key: 'aadhaarNumber', label: 'Aadhaar' },
   { key: 'message', label: 'Message' },
   { key: 'status', label: 'Status' },
 ];

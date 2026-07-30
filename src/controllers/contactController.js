@@ -7,7 +7,7 @@ import { toCsvBuffer, toXlsxBuffer, EXPORT_COLUMNS } from '../utils/exportUtils.
 import { buildDateRangeFilter, startOfIstToday } from '../utils/dateRange.js';
 import { withId, withIds } from '../utils/serialize.js';
 
-const SEARCH_FIELDS = ['fullName', 'email', 'phone', 'organisation', 'message'];
+const SEARCH_FIELDS = ['fullName', 'email', 'phone', 'panNumber', 'aadhaarNumber', 'organisation', 'message'];
 
 function buildContactFilter({ status, search, dateFilter, startDate, endDate }) {
   const where = {};
@@ -28,10 +28,25 @@ function buildContactFilter({ status, search, dateFilter, startDate, endDate }) 
 }
 
 export const createContact = asyncHandler(async (req, res) => {
-  const contact = await prisma.contact.create({ data: req.body });
+  const { fullName, email, phone, panNumber, aadhaarNumber, organisation, serviceRequired, message } =
+    req.body;
+
+  const contact = await prisma.contact.create({
+    data: {
+      fullName,
+      email,
+      phone: phone || null,
+      panNumber: panNumber || null,
+      aadhaarNumber: aadhaarNumber || null,
+      organisation: organisation || null,
+      serviceRequired,
+      message,
+    },
+  });
   const serialized = withId(contact);
 
-  sendNewContactNotification(contact, req);
+  // Fire-and-forget — don't block the API response on email delivery
+  void sendNewContactNotification(contact, req);
 
   res.status(201).json({
     success: true,
@@ -137,8 +152,8 @@ export const exportContacts = asyncHandler(async (req, res) => {
     fullName: contact.fullName,
     email: contact.email,
     phone: contact.phone || '',
-    organisation: contact.organisation || '',
-    serviceRequired: contact.serviceRequired,
+    panNumber: contact.panNumber || '',
+    aadhaarNumber: contact.aadhaarNumber || '',
     message: contact.message,
     status: contact.status,
   }));

@@ -42,6 +42,8 @@ model Contact {
   fullName        String        @map("full_name") @db.VarChar(120)
   email           String        @db.VarChar(255)
   phone           String?       @db.VarChar(20)
+  panNumber       String?       @map("pan_number") @db.VarChar(10)
+  aadhaarNumber   String?       @map("aadhaar_number") @db.VarChar(12)
   organisation    String?       @db.VarChar(150)
   serviceRequired String        @map("service_required")
   message         String        @db.VarChar(2000)
@@ -127,16 +129,64 @@ model FAQ {
 }
 
 model Equipment {
-  id          String   @id @default(uuid())
+  id String @id @default(uuid())
+
+  // Auto-generated (admin)
+  equipmentCode String? @unique @db.VarChar(50) @map("equipment_code")
+
+  // Public section (keep existing fields for the website)
   title       String
   description String
   icon        String   @default("FaTools")
   order       Int      @default(0)
   isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
 
+  // Entry management fields
+  image String? @db.VarChar(400)
+
+  category String? @db.VarChar(120)
+
+  quantity Int @default(0)
+  availableQuantity Int @default(0) @map("available_quantity")
+
+  purchaseDate DateTime? @map("purchase_date")
+  purchaseCost Int? @map("purchase_cost")
+  supplier String? @db.VarChar(200)
+
+  condition EquipmentCondition @default(Good)
+  location String? @db.VarChar(120)
+  rackNumber String? @map("rack_number") @db.VarChar(50)
+
+  status EquipmentStatus @default(Available)
+  maintenance String? @db.VarChar(2000)
+  remarks String? @db.VarChar(2000)
+
+  // QR + Barcode (barcode rendering can be added later)
+  qrCodePath String? @map("qr_code_path") @db.VarChar(400)
+  barcodeValue String? @map("barcode_value") @db.VarChar(120)
+
+  history EquipmentHistory[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([category])
+  @@index([status])
   @@map("equipment")
+}
+
+model EquipmentHistory {
+  id String @id @default(uuid())
+  equipmentId String @map("equipment_id")
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  eventType String @map("event_type") // e.g. "status_change", "maintenance", "condition_change"
+  description String? @db.VarChar(1000)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([equipmentId, createdAt])
+  @@map("equipment_history")
 }
 
 model CoverageArea {
@@ -153,3 +203,290 @@ model CoverageArea {
   @@index([order, state])
   @@map("coverage_areas")
 }
+
+model Program {
+  id           String   @id @default(uuid())
+  title        String   @db.VarChar(200)
+  description  String   @db.VarChar(2000)
+  image        String?
+  displayOrder Int      @default(0) @map("display_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([displayOrder, isActive])
+  @@map("programs")
+}
+
+model GalleryItem {
+  id           String   @id @default(uuid())
+  title        String?  @db.VarChar(200)
+  category     String   @default("General") @db.VarChar(100)
+  image        String
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([displayOrder])
+  @@index([category])
+  @@map("gallery_items")
+}
+
+model Facility {
+  id           String   @id @default(uuid())
+  name         String   @db.VarChar(200)
+  description  String   @db.VarChar(2000)
+  icon         String?  @db.VarChar(100)
+  image        String?
+  displayOrder Int      @default(0) @map("display_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([displayOrder, isActive])
+  @@map("facilities")
+}
+
+enum VideoStatus {
+  published
+  draft
+}
+
+model Video {
+  id           String      @id @default(uuid())
+  title        String      @db.VarChar(200)
+  slug         String      @unique @db.VarChar(220)
+  subtitle     String?     @db.VarChar(300)
+  description  String      @db.VarChar(3000)
+  category     String      @db.VarChar(100)
+  coachName    String?     @map("coach_name") @db.VarChar(120)
+  duration     String?     @db.VarChar(20)
+  thumbnail    String?
+  videoFile    String?     @map("video_file")
+  youtubeUrl   String?     @map("youtube_url") @db.VarChar(500)
+  vimeoUrl     String?     @map("vimeo_url") @db.VarChar(500)
+  isFeatured   Boolean     @default(false) @map("is_featured")
+  displayOrder Int         @default(0) @map("display_order")
+  status       VideoStatus @default(draft)
+  views        Int         @default(0)
+  fileSize     Int         @default(0) @map("file_size")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@index([displayOrder, status])
+  @@index([category])
+  @@index([isFeatured, status])
+  @@map("videos")
+}
+
+// ---------------------------
+// Entry Management
+// ---------------------------
+
+enum StudentStatus {
+  Active
+  Inactive
+  Suspended
+}
+
+enum StudentGender {
+  Male
+  Female
+  Other
+}
+
+enum TrainingLevel {
+  Beginner
+  Intermediate
+  Advanced
+  Professional
+}
+
+enum CoachStatus {
+  Active
+  Inactive
+  Suspended
+}
+
+enum EquipmentCondition {
+  Excellent
+  Good
+  Average
+  Damaged
+}
+
+enum EquipmentStatus {
+  Available
+  InUse
+  Maintenance
+  Lost
+}
+
+enum PaymentStatus {
+  Paid
+  Pending
+  Overdue
+}
+
+model Student {
+  id String @id @default(uuid())
+
+  // Auto-generated: AKH-2026-0001
+  registrationNumber String @unique @db.VarChar(50) @map("registration_number")
+  admissionNumber String? @db.VarChar(50) @map("admission_number")
+
+  fullName String @db.VarChar(150) @map("full_name")
+  fatherName String @db.VarChar(150) @map("father_name")
+  motherName String @db.VarChar(150) @map("mother_name")
+  gender StudentGender
+  dateOfBirth DateTime @map("date_of_birth")
+
+  bloodGroup String? @db.VarChar(10) @map("blood_group")
+  mobileNumber String @db.VarChar(20) @map("mobile_number")
+  alternateMobile String? @db.VarChar(20) @map("alternate_mobile")
+  email String? @db.VarChar(255)
+
+  // Address
+  address String? @db.VarChar(220)
+  village String? @db.VarChar(100)
+  city String? @db.VarChar(100)
+  district String? @db.VarChar(100)
+  state String? @db.VarChar(100)
+  pincode String? @db.VarChar(10)
+
+  // Identity numbers (images live in StudentDocument)
+  aadhaarNumber String @unique @db.VarChar(12) @map("aadhaar_number")
+  panNumber String @unique @db.VarChar(10) @map("pan_number")
+
+  // Student photo
+  photo String? @db.VarChar(400)
+
+  // Training
+  joiningDate DateTime @map("joining_date")
+  membershipType String @db.VarChar(120) @map("membership_type")
+  batch String @db.VarChar(120)
+  coachId String? @map("coach_id")
+  coach Coach? @relation(fields: [coachId], references: [id])
+
+  trainingLevel TrainingLevel @map("training_level")
+
+  // Physical
+  heightCm Int? @map("height_cm")
+  weightKg Int? @map("weight_kg")
+  chest Int? @map("chest")
+  age Int?
+  category String? // as provided
+
+  // Emergency
+  guardianName String? @map("guardian_name")
+  guardianRelation String? @map("guardian_relation")
+  guardianMobile String? @map("guardian_mobile")
+
+  // Medical
+  allergies String?
+  medicalNotes String? @map("medical_notes")
+
+  // Notes
+  adminNotes String? @map("admin_notes")
+
+  // Profile extras for rendering
+  status StudentStatus @default(Active)
+  achievements String?
+  paymentStatus PaymentStatus @default(Pending) @map("payment_status")
+  attendanceTotal Int @default(0) @map("attendance_total")
+  attendancePresent Int @default(0) @map("attendance_present")
+  attendanceAbsent Int @default(0) @map("attendance_absent")
+
+  // QR
+  qrCodePath String? @map("qr_code_path") @db.VarChar(400)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  studentDocuments StudentDocument?
+
+  @@index([status])
+  @@index([coachId])
+  @@index([batch])
+  @@index([membershipType])
+  @@index([joiningDate])
+  @@map("students")
+}
+
+model StudentDocument {
+  id String @id @default(uuid())
+  studentId String @unique @map("student_id")
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  aadhaarFrontImage String? @map("aadhaar_front_image") @db.VarChar(400)
+  aadhaarBackImage String? @map("aadhaar_back_image") @db.VarChar(400)
+  panCardImage String? @map("pan_card_image") @db.VarChar(400)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("student_documents")
+}
+
+model Coach {
+  id String @id @default(uuid())
+
+  // Auto-generated
+  coachCode String @unique @db.VarChar(50) @map("coach_code")
+
+  photo String? @db.VarChar(400)
+
+  fullName String @db.VarChar(150) @map("full_name")
+  fatherName String @db.VarChar(150) @map("father_name")
+  mobile String @db.VarChar(20)
+  email String? @db.VarChar(255)
+  dateOfBirth DateTime @map("date_of_birth")
+
+  address String? @db.VarChar(300)
+
+  experienceYears Int? @map("experience_years")
+  specialization String? // comma-separated or single value
+  qualification String?
+  salary Int?
+  joiningDate DateTime? @map("joining_date")
+
+  status CoachStatus @default(Active)
+
+  // Identity numbers (images live in CoachDocument)
+  aadhaarNumber String @unique @db.VarChar(12) @map("aadhaar_number")
+  panNumber String @unique @db.VarChar(10) @map("pan_number")
+
+  // Profile
+  achievements String?
+  biography String?
+  socialLinks Json? @map("social_links")
+
+  // QR
+  qrCodePath String? @map("qr_code_path") @db.VarChar(400)
+
+  documents CoachDocument?
+  students Student[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("coaches")
+}
+
+model CoachDocument {
+  id String @id @default(uuid())
+  coachId String @unique @map("coach_id")
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  aadhaarFrontImage String? @map("aadhaar_front_image") @db.VarChar(400)
+  aadhaarBackImage String? @map("aadhaar_back_image") @db.VarChar(400)
+  panCardImage String? @map("pan_card_image") @db.VarChar(400)
+  certificates Json? @map("certificates")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("coach_documents")
+}
+
