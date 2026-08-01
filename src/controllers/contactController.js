@@ -7,7 +7,7 @@ import { toCsvBuffer, toXlsxBuffer, EXPORT_COLUMNS } from '../utils/exportUtils.
 import { buildDateRangeFilter, startOfIstToday } from '../utils/dateRange.js';
 import { withId, withIds } from '../utils/serialize.js';
 
-const SEARCH_FIELDS = ['fullName', 'email', 'phone', 'panNumber', 'aadhaarNumber', 'organisation', 'message'];
+const SEARCH_FIELDS = ['fullName', 'email', 'phone', 'organisation', 'message'];
 
 function buildContactFilter({ status, search, dateFilter, startDate, endDate }) {
   const where = {};
@@ -152,8 +152,6 @@ export const exportContacts = asyncHandler(async (req, res) => {
     fullName: contact.fullName,
     email: contact.email,
     phone: contact.phone || '',
-    panNumber: contact.panNumber || '',
-    aadhaarNumber: contact.aadhaarNumber || '',
     message: contact.message,
     status: contact.status,
   }));

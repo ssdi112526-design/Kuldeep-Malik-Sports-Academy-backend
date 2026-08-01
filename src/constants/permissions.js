@@ -66,6 +66,8 @@ export function getSystemRolePermissionKeys(allKeys) {
   const adminDeniedPrefixes = ['users.', 'roles.'];
   const admin = allKeys.filter((k) => !adminDeniedPrefixes.some((p) => k.startsWith(p)));
 
+  // Coach / manager / reception get full action sets for their menus (system defaults).
+  // Custom roles still store exact checkbox state with no inheritance.
   const coachMenus = ['dashboard', 'students', 'schedule', 'achievements', 'videos', 'gallery'];
   const coach = allKeys.filter((k) => coachMenus.some((m) => k.startsWith(`${m}.`)));
 
@@ -82,6 +84,7 @@ export function getSystemRolePermissionKeys(allKeys) {
       (k.endsWith('.view') || k.endsWith('.export') || k.endsWith('.print') || k.endsWith('.download'))
   );
 
+  // Staff: view-only — must not include create/edit/delete
   const staff = allKeys.filter((k) => k.endsWith('.view'));
 
   return {
@@ -93,6 +96,13 @@ export function getSystemRolePermissionKeys(allKeys) {
     accountant,
     staff,
   };
+}
+
+/** All permission keys for a module (for list/read OR checks). */
+export function modulePermissionKeys(menu) {
+  const def = MENU_DEFINITIONS.find((m) => m.menu === menu);
+  if (!def) return [`${menu}.view`];
+  return def.actions.map((action) => `${menu}.${action}`);
 }
 
 export const SYSTEM_ROLES = [

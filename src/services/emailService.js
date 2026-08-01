@@ -57,18 +57,16 @@ function buildEmailHtml(contact, ip, submittedAt) {
     ['Full Name', contact.fullName],
     ['Email', contact.email],
     ['Phone', contact.phone || '-'],
-    ['PAN Number', contact.panNumber || '-'],
-    ['Aadhaar Number', contact.aadhaarNumber || '-'],
     ['Message', contact.message],
     ['Date & Time', submittedAt],
     ['IP Address', ip],
   ];
 
   if (contact.organisation) {
-    rows.splice(5, 0, ['Organisation', contact.organisation]);
+    rows.splice(3, 0, ['Organisation', contact.organisation]);
   }
   if (contact.serviceRequired && contact.serviceRequired !== 'General Inquiry') {
-    rows.splice(contact.organisation ? 6 : 5, 0, ['Inquiry Type', contact.serviceRequired]);
+    rows.splice(contact.organisation ? 4 : 3, 0, ['Inquiry Type', contact.serviceRequired]);
   }
 
   const rowsHtml = rows

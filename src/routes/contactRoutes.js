@@ -9,7 +9,7 @@ import {
   updateContactStatus,
   deleteContact,
 } from '../controllers/contactController.js';
-import { protect, authorize } from '../middleware/auth.js';
+import { protect, requirePermission, requireAnyPermission } from '../middleware/auth.js';
 import validate from '../middleware/validate.js';
 import { contactValidation } from '../validators/authValidators.js';
 import {
@@ -17,23 +17,26 @@ import {
   exportValidation,
   bulkDeleteValidation,
 } from '../validators/contactAdminValidators.js';
+import { modulePermissionKeys } from '../constants/permissions.js';
 
 const router = Router();
 
+const inquiriesRead = [protect, requireAnyPermission(...modulePermissionKeys('inquiries'))];
+
 router.post('/', contactValidation, validate, createContact);
-router.get('/', protect, authorize('admin'), listQueryValidation, validate, getContacts);
-router.get('/stats', protect, authorize('admin'), getContactStats);
-router.post('/export', protect, authorize('admin'), exportValidation, validate, exportContacts);
+router.get('/', ...inquiriesRead, listQueryValidation, validate, getContacts);
+router.get('/stats', ...inquiriesRead, getContactStats);
+router.post('/export', protect, requirePermission('inquiries.export'), exportValidation, validate, exportContacts);
 router.post(
   '/bulk-delete',
   protect,
-  authorize('admin'),
+  requirePermission('inquiries.delete'),
   bulkDeleteValidation,
   validate,
   bulkDeleteContacts
 );
-router.get('/:id', protect, authorize('admin'), getContactById);
-router.patch('/:id/status', protect, authorize('admin'), updateContactStatus);
-router.delete('/:id', protect, authorize('admin'), deleteContact);
+router.get('/:id', ...inquiriesRead, getContactById);
+router.patch('/:id/status', protect, requirePermission('inquiries.edit'), updateContactStatus);
+router.delete('/:id', protect, requirePermission('inquiries.delete'), deleteContact);
 
 export default router;

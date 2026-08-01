@@ -1,7 +1,8 @@
 import { Router } from 'express';
-import { protect, authorize } from '../middleware/auth.js';
+import { protect, requirePermission, requireAnyPermission } from '../middleware/auth.js';
 import validate from '../middleware/validate.js';
 import { handleMulterError, uploadStudentEntry, uploadCoachEntry, uploadEquipmentEntry } from '../middleware/upload.js';
+import { modulePermissionKeys } from '../constants/permissions.js';
 import {
   listStudentsAdmin,
   getStudentById,
@@ -27,7 +28,6 @@ import {
 } from '../controllers/entryController.js';
 
 const router = Router();
-const admin = [protect, authorize('admin')];
 
 const runUpload = (uploader) => (req, res, next) => {
   uploader(req, res, (err) => {
@@ -36,38 +36,41 @@ const runUpload = (uploader) => (req, res, next) => {
   });
 };
 
+const studentsRead = [protect, requireAnyPermission(...modulePermissionKeys('students'))];
+const coachesRead = [protect, requireAnyPermission(...modulePermissionKeys('coaches'))];
+const equipmentRead = [protect, requireAnyPermission(...modulePermissionKeys('equipment'))];
+
 // ---------------------------
 // Students
 // ---------------------------
-router.get('/admin/students', ...admin, listStudentsAdmin);
-router.get('/admin/students/stats', ...admin, getStudentStats);
-router.get('/admin/students/:id', ...admin, getStudentById);
-router.post('/admin/students/export', ...admin, exportStudents);
-router.post('/admin/students', ...admin, runUpload(uploadStudentEntry), createStudent);
-router.put('/admin/students/:id', ...admin, runUpload(uploadStudentEntry), updateStudent);
-router.delete('/admin/students/:id', ...admin, deleteStudent);
+router.get('/admin/students', ...studentsRead, listStudentsAdmin);
+router.get('/admin/students/stats', ...studentsRead, getStudentStats);
+router.get('/admin/students/:id', ...studentsRead, getStudentById);
+router.post('/admin/students/export', protect, requirePermission('students.export'), exportStudents);
+router.post('/admin/students', protect, requirePermission('students.create'), runUpload(uploadStudentEntry), createStudent);
+router.put('/admin/students/:id', protect, requirePermission('students.edit'), runUpload(uploadStudentEntry), updateStudent);
+router.delete('/admin/students/:id', protect, requirePermission('students.delete'), deleteStudent);
 
 // ---------------------------
 // Coaches
 // ---------------------------
-router.get('/admin/coaches', ...admin, listCoachesAdmin);
-router.get('/admin/coaches/stats', ...admin, getCoachStats);
-router.post('/admin/coaches/export', ...admin, exportCoaches);
-router.get('/admin/coaches/:id', ...admin, getCoachById);
-router.post('/admin/coaches', ...admin, runUpload(uploadCoachEntry), createCoach);
-router.put('/admin/coaches/:id', ...admin, runUpload(uploadCoachEntry), updateCoach);
-router.delete('/admin/coaches/:id', ...admin, deleteCoach);
+router.get('/admin/coaches', ...coachesRead, listCoachesAdmin);
+router.get('/admin/coaches/stats', ...coachesRead, getCoachStats);
+router.post('/admin/coaches/export', protect, requirePermission('coaches.export'), exportCoaches);
+router.get('/admin/coaches/:id', ...coachesRead, getCoachById);
+router.post('/admin/coaches', protect, requirePermission('coaches.create'), runUpload(uploadCoachEntry), createCoach);
+router.put('/admin/coaches/:id', protect, requirePermission('coaches.edit'), runUpload(uploadCoachEntry), updateCoach);
+router.delete('/admin/coaches/:id', protect, requirePermission('coaches.delete'), deleteCoach);
 
 // ---------------------------
 // Equipment / Tools
 // ---------------------------
-router.get('/admin/equipment', ...admin, listEquipmentAdmin);
-router.get('/admin/equipment/stats', ...admin, getEquipmentStats);
-router.post('/admin/equipment/export', ...admin, exportEquipment);
-router.get('/admin/equipment/:id', ...admin, getEquipmentById);
-router.post('/admin/equipment', ...admin, runUpload(uploadEquipmentEntry), createEquipment);
-router.put('/admin/equipment/:id', ...admin, runUpload(uploadEquipmentEntry), updateEquipment);
-router.delete('/admin/equipment/:id', ...admin, deleteEquipment);
+router.get('/admin/equipment', ...equipmentRead, listEquipmentAdmin);
+router.get('/admin/equipment/stats', ...equipmentRead, getEquipmentStats);
+router.post('/admin/equipment/export', protect, requirePermission('equipment.export'), exportEquipment);
+router.get('/admin/equipment/:id', ...equipmentRead, getEquipmentById);
+router.post('/admin/equipment', protect, requirePermission('equipment.create'), runUpload(uploadEquipmentEntry), createEquipment);
+router.put('/admin/equipment/:id', protect, requirePermission('equipment.edit'), runUpload(uploadEquipmentEntry), updateEquipment);
+router.delete('/admin/equipment/:id', protect, requirePermission('equipment.delete'), deleteEquipment);
 
 export default router;
-

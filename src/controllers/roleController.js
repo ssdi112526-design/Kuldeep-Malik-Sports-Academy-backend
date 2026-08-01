@@ -15,11 +15,25 @@ function slugify(name) {
 
 export const listPermissionsCatalog = asyncHandler(async (_req, res) => {
   const permissions = await prisma.permission.findMany({ orderBy: [{ menu: 'asc' }, { action: 'asc' }] });
+  const allowedMenus = new Set(MENU_DEFINITIONS.map((m) => m.menu));
+  const allowedKeys = new Set(buildPermissionCatalog().map((p) => p.key));
+  const filtered = permissions.filter((p) => allowedMenus.has(p.menu) && allowedKeys.has(p.key));
+
+  // Stable UI order from MENU_DEFINITIONS (not alphabetical DB order)
+  const ordered = [];
+  for (const def of MENU_DEFINITIONS) {
+    for (const action of def.actions) {
+      const key = `${def.menu}.${action}`;
+      const row = filtered.find((p) => p.key === key);
+      if (row) ordered.push(row);
+    }
+  }
+
   res.json({
     success: true,
     data: {
       menus: MENU_DEFINITIONS,
-      permissions,
+      permissions: ordered,
       catalog: buildPermissionCatalog(),
     },
   });
@@ -45,7 +59,7 @@ export const listRoles = asyncHandler(async (req, res) => {
     prisma.role.findMany({
       where,
       include: {
-        _count: { select: { users: true, permissions: true } },
+        _count: { select: { users: true } },
         permissions: {
           where: { allowed: true },
           include: { permission: { select: { key: true, menu: true, action: true, label: true } } },
@@ -67,7 +81,7 @@ export const listRoles = asyncHandler(async (req, res) => {
         description: r.description,
         isSystem: r.isSystem,
         userCount: r._count.users,
-        permissionCount: r._count.permissions,
+        permissionCount: r.permissions.length,
         permissions: r.permissions.map((p) => p.permission.key),
         permissionDetails: r.permissions.map((p) => p.permission),
         createdAt: r.createdAt,

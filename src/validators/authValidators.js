@@ -17,20 +17,8 @@ export const contactValidation = [
   body('fullName').trim().notEmpty().withMessage('Full name is required').isLength({ max: 120 }),
   body('email').trim().isEmail().withMessage('Valid email is required').normalizeEmail(),
   body('phone').optional({ checkFalsy: true }).trim().isLength({ max: 20 }),
-  body('panNumber')
-    .trim()
-    .notEmpty()
-    .withMessage('PAN number is required')
-    .customSanitizer((value) => String(value || '').toUpperCase().replace(/\s+/g, ''))
-    .matches(/^[A-Z]{5}[0-9]{4}[A-Z]$/)
-    .withMessage('Enter a valid PAN (e.g. ABCDE1234F)'),
-  body('aadhaarNumber')
-    .trim()
-    .notEmpty()
-    .withMessage('Aadhaar number is required')
-    .customSanitizer((value) => String(value || '').replace(/\s+/g, ''))
-    .matches(/^[0-9]{12}$/)
-    .withMessage('Enter a valid 12-digit Aadhaar number'),
+  body('panNumber').optional({ checkFalsy: true }).trim().isLength({ max: 20 }),
+  body('aadhaarNumber').optional({ checkFalsy: true }).trim().isLength({ max: 20 }),
   body('organisation').optional({ checkFalsy: true }).trim().isLength({ max: 150 }),
   body('serviceRequired').trim().notEmpty().withMessage('Service is required'),
   body('message')

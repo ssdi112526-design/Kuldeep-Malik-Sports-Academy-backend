@@ -1,5 +1,4 @@
 import jwt from 'jsonwebtoken';
-import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { getUserPermissions, loadUserWithRole, serializeUser } from '../utils/rbac.js';
@@ -33,44 +32,87 @@ export const protect = asyncHandler(async (req, res, next) => {
   }
 });
 
-/** Legacy role string check (admin | user) — admin panel operators */
+/**
+ * Legacy role string check.
+ * IMPORTANT: does NOT grant access merely because the user can open the admin panel.
+ * Only Super Admin / legacy admin role / explicit role match.
+ */
 export const authorize = (...roles) => (req, res, next) => {
   if (!req.user) {
-    return next(new ApiError(403, 'You do not have permission for this action.'));
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
   }
+
   if (roles.includes('admin')) {
     const slug = req.user.roleSlug;
     if (
       req.user.isSuperAdmin ||
       req.user.role === 'admin' ||
       slug === 'super_admin' ||
-      slug === 'admin' ||
-      req.user.canAccessAdmin
+      slug === 'admin'
     ) {
       return next();
     }
   }
+
   if (!roles.includes(req.user.role)) {
-    return next(new ApiError(403, 'You do not have permission for this action.'));
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
   }
   next();
 };
 
+function isUnrestricted(req) {
+  return Boolean(req.user?.isSuperAdmin || req.permissions?.includes('*.*'));
+}
+
+function hasExactPermission(req, key) {
+  if (!key) return false;
+  return Boolean(req.permissions?.includes(key));
+}
+
+/**
+ * Require ALL listed permission keys (AND).
+ * Each key is checked independently — no inheritance (view ≠ edit, etc.).
+ */
 export const requirePermission = (...keys) => (req, res, next) => {
   if (!req.user) {
-    return next(new ApiError(403, 'Access Denied'));
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
   }
-  if (req.user.isSuperAdmin || req.permissions?.includes('*.*')) {
-    return next();
+  if (isUnrestricted(req)) return next();
+
+  const required = keys.filter(Boolean);
+  if (!required.length) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
   }
-  const ok = keys.some((k) => req.permissions?.includes(k));
+
+  const ok = required.every((k) => hasExactPermission(req, k));
   if (!ok) {
-    return next(new ApiError(403, "You don't have permission to access this resource."));
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
   }
   next();
 };
 
-export const requireAnyPermission = requirePermission;
+/**
+ * Require ANY of the listed permission keys (OR).
+ * Used for read/list endpoints so create/edit/delete-only roles can load data
+ * without treating view as granting those write actions.
+ */
+export const requireAnyPermission = (...keys) => (req, res, next) => {
+  if (!req.user) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  if (isUnrestricted(req)) return next();
+
+  const required = keys.filter(Boolean);
+  if (!required.length) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+
+  const ok = required.some((k) => hasExactPermission(req, k));
+  if (!ok) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  next();
+};
 
 /** Must be able to open admin panel */
 export const requireAdminAccess = (req, res, next) => {
