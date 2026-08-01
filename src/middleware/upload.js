@@ -78,6 +78,13 @@ export const uploadSingle = multer({
   limits: { fileSize: MAX_IMAGE },
 }).single('image');
 
+/** Profile photo for user management (field: profileImage) */
+export const uploadProfileImage = multer({
+  storage: imageStorage,
+  fileFilter: imageFilter,
+  limits: { fileSize: MAX_IMAGE },
+}).single('profileImage');
+
 export const uploadMultiple = multer({
   storage: imageStorage,
   fileFilter: imageFilter,

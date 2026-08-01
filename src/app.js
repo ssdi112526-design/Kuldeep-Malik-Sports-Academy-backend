@@ -10,6 +10,8 @@ import contentRoutes from './routes/contentRoutes.js';
 import cmsRoutes from './routes/cmsRoutes.js';
 import entryRoutes from './routes/entryRoutes.js';
 import uploadSyncRoutes from './routes/uploadSyncRoutes.js';
+import rbacRoutes from './routes/rbacRoutes.js';
+import scheduleAchievementRoutes from './routes/scheduleAchievementRoutes.js';
 import indexRoutes from './routes/index.js';
 import errorHandler, { notFound } from './middleware/errorHandler.js';
 import { UPLOADS_DIR } from './middleware/upload.js';
@@ -56,6 +58,8 @@ app.use('/api/content', contentRoutes);
 app.use('/api', cmsRoutes);
 app.use('/api', entryRoutes);
 app.use('/api', uploadSyncRoutes);
+app.use('/api', rbacRoutes);
+app.use('/api', scheduleAchievementRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

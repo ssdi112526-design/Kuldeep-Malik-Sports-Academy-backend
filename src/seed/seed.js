@@ -219,10 +219,14 @@ const seed = async () => {
       data: {
         name: 'Admin',
         email: adminEmail.toLowerCase(),
+        username: 'superadmin',
         password: hashed,
         role: 'admin',
       },
     });
+
+    const { seedRbac } = await import('./seedRbac.js');
+    await seedRbac(adminEmail);
 
     await prisma.service.createMany({ data: services });
     await prisma.product.createMany({ data: products });
