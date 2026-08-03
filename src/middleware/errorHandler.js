@@ -25,6 +25,12 @@ const errorHandler = (err, req, res, next) => {
     message = 'Validation failed';
   }
 
+  if (/Transaction already closed|expired transaction|transaction.*timeout/i.test(String(err.message || ''))) {
+    statusCode = 503;
+    message = 'Server is busy. Please scan the new QR code again.';
+    err.code = err.code || 'TRANSACTION_TIMEOUT';
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     console.error(err);
   }
@@ -32,6 +38,7 @@ const errorHandler = (err, req, res, next) => {
   res.status(statusCode).json({
     success: false,
     message,
+    ...(err.code ? { code: err.code } : {}),
     errors,
     ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
   });

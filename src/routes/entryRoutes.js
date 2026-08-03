@@ -18,6 +18,8 @@ import {
   deleteCoach,
   getCoachStats,
   exportCoaches,
+  resetCoachPassword,
+  resetStudentPassword,
   listEquipmentAdmin,
   getEquipmentById,
   createEquipment,
@@ -49,6 +51,12 @@ router.get('/admin/students/:id', ...studentsRead, getStudentById);
 router.post('/admin/students/export', protect, requirePermission('students.export'), exportStudents);
 router.post('/admin/students', protect, requirePermission('students.create'), runUpload(uploadStudentEntry), createStudent);
 router.put('/admin/students/:id', protect, requirePermission('students.edit'), runUpload(uploadStudentEntry), updateStudent);
+router.post(
+  '/admin/students/:id/reset-password',
+  protect,
+  requireAnyPermission('students.reset_password', 'students.edit'),
+  resetStudentPassword
+);
 router.delete('/admin/students/:id', protect, requirePermission('students.delete'), deleteStudent);
 
 // ---------------------------
@@ -60,6 +68,12 @@ router.post('/admin/coaches/export', protect, requirePermission('coaches.export'
 router.get('/admin/coaches/:id', ...coachesRead, getCoachById);
 router.post('/admin/coaches', protect, requirePermission('coaches.create'), runUpload(uploadCoachEntry), createCoach);
 router.put('/admin/coaches/:id', protect, requirePermission('coaches.edit'), runUpload(uploadCoachEntry), updateCoach);
+router.post(
+  '/admin/coaches/:id/reset-password',
+  protect,
+  requireAnyPermission('coaches.reset_password', 'coaches.edit'),
+  resetCoachPassword
+);
 router.delete('/admin/coaches/:id', protect, requirePermission('coaches.delete'), deleteCoach);
 
 // ---------------------------

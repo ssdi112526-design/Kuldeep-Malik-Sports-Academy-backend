@@ -35,10 +35,11 @@ export const MENU_DEFINITIONS = [
   { menu: 'gallery', label: 'Gallery', actions: ['view', 'create', 'edit', 'delete', 'upload', 'download', 'publish'] },
   { menu: 'facilities', label: 'Facilities', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'videos', label: 'Videos', actions: ['view', 'create', 'edit', 'delete', 'upload', 'publish'] },
-  { menu: 'students', label: 'Students', actions: ['view', 'create', 'edit', 'delete', 'export', 'import', 'upload', 'print'] },
-  { menu: 'coaches', label: 'Coaches', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload'] },
+  { menu: 'students', label: 'Students', actions: ['view', 'create', 'edit', 'delete', 'export', 'import', 'upload', 'print', 'reset_password'] },
+  { menu: 'coaches', label: 'Coaches', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload', 'reset_password'] },
   { menu: 'equipment', label: 'Equipment & Tools', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload'] },
   { menu: 'schedule', label: 'Schedule', actions: ['view', 'create', 'edit', 'delete'] },
+  { menu: 'attendance', label: 'Attendance', actions: ['view', 'create', 'edit', 'export'] },
   { menu: 'achievements', label: 'Achievements', actions: ['view', 'create', 'edit', 'delete'] },
   { menu: 'users', label: 'Users', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { menu: 'roles', label: 'Roles', actions: ['view', 'create', 'edit', 'delete', 'manage_settings'] },
@@ -68,13 +69,13 @@ export function getSystemRolePermissionKeys(allKeys) {
 
   // Coach / manager / reception get full action sets for their menus (system defaults).
   // Custom roles still store exact checkbox state with no inheritance.
-  const coachMenus = ['dashboard', 'students', 'schedule', 'achievements', 'videos', 'gallery'];
+  const coachMenus = ['dashboard', 'students', 'schedule', 'attendance', 'achievements', 'videos', 'gallery'];
   const coach = allKeys.filter((k) => coachMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const managerMenus = ['dashboard', 'programs', 'gallery', 'facilities', 'videos', 'students'];
+  const managerMenus = ['dashboard', 'programs', 'gallery', 'facilities', 'videos', 'students', 'attendance'];
   const manager = allKeys.filter((k) => managerMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const receptionMenus = ['students', 'inquiries', 'dashboard'];
+  const receptionMenus = ['students', 'inquiries', 'dashboard', 'attendance'];
   const reception = allKeys.filter((k) => receptionMenus.some((m) => k.startsWith(`${m}.`)));
 
   const accountantMenus = ['dashboard', 'students'];
@@ -87,6 +88,7 @@ export function getSystemRolePermissionKeys(allKeys) {
   // Staff: view-only — must not include create/edit/delete
   const staff = allKeys.filter((k) => k.endsWith('.view'));
 
+  // Student / coach portal roles — no admin permissions
   return {
     super_admin: superAdmin,
     admin,
@@ -95,8 +97,12 @@ export function getSystemRolePermissionKeys(allKeys) {
     reception,
     accountant,
     staff,
+    student: [],
+    coach_portal: [],
   };
 }
+
+export const LOW_ATTENDANCE_THRESHOLD = Number(process.env.LOW_ATTENDANCE_THRESHOLD || 75);
 
 /** All permission keys for a module (for list/read OR checks). */
 export function modulePermissionKeys(menu) {
@@ -108,9 +114,11 @@ export function modulePermissionKeys(menu) {
 export const SYSTEM_ROLES = [
   { name: 'Super Admin', slug: 'super_admin', description: 'Full system access including users and roles.', isSystem: true },
   { name: 'Admin', slug: 'admin', description: 'Full content and operations access except user/role management.', isSystem: true },
-  { name: 'Coach', slug: 'coach', description: 'Students, schedule, achievements, videos and gallery.', isSystem: true },
-  { name: 'Manager', slug: 'manager', description: 'Programs, content and students.', isSystem: true },
-  { name: 'Reception', slug: 'reception', description: 'Students and inquiries desk.', isSystem: true },
+  { name: 'Coach', slug: 'coach', description: 'Students, schedule, attendance, achievements, videos and gallery.', isSystem: true },
+  { name: 'Manager', slug: 'manager', description: 'Programs, content, students and attendance.', isSystem: true },
+  { name: 'Reception', slug: 'reception', description: 'Students, inquiries and attendance desk.', isSystem: true },
   { name: 'Accountant', slug: 'accountant', description: 'Dashboard and student record views.', isSystem: true },
   { name: 'Staff', slug: 'staff', description: 'View-only access across allowed modules.', isSystem: true },
+  { name: 'Student', slug: 'student', description: 'Student portal only — profile, QR scan and own attendance.', isSystem: true },
+  { name: 'Coach Portal', slug: 'coach_portal', description: 'Coach user panel only — profile, own attendance and account.', isSystem: true },
 ];

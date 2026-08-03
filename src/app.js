@@ -12,6 +12,9 @@ import entryRoutes from './routes/entryRoutes.js';
 import uploadSyncRoutes from './routes/uploadSyncRoutes.js';
 import rbacRoutes from './routes/rbacRoutes.js';
 import scheduleAchievementRoutes from './routes/scheduleAchievementRoutes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
+import coachAttendanceRoutes from './routes/coachAttendanceRoutes.js';
+import coachPortalRoutes from './routes/coachPortalRoutes.js';
 import indexRoutes from './routes/index.js';
 import errorHandler, { notFound } from './middleware/errorHandler.js';
 import { UPLOADS_DIR } from './middleware/upload.js';
@@ -40,6 +43,22 @@ app.use(
       if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
         return callback(null, true);
       }
+      // Local LAN testing from phone / other devices
+      if (process.env.NODE_ENV !== 'production') {
+        try {
+          const { hostname } = new URL(origin);
+          if (
+            hostname === 'localhost' ||
+            hostname === '127.0.0.1' ||
+            /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+            /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+          ) {
+            return callback(null, true);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       return callback(null, false);
     },
     credentials: true,
@@ -60,6 +79,9 @@ app.use('/api', entryRoutes);
 app.use('/api', uploadSyncRoutes);
 app.use('/api', rbacRoutes);
 app.use('/api', scheduleAchievementRoutes);
+app.use('/api', attendanceRoutes);
+app.use('/api', coachAttendanceRoutes);
+app.use('/api', coachPortalRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

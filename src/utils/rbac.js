@@ -27,7 +27,7 @@ export async function writeAuditLog({
 
 export function serializeUser(user, permissions = []) {
   if (!user) return null;
-  const { password, ...rest } = user;
+  const { password, passwordResetToken, passwordResetExpires, ...rest } = user;
   const roleRef = user.roleRef
     ? {
         id: user.roleRef.id,
@@ -39,7 +39,66 @@ export function serializeUser(user, permissions = []) {
     : null;
 
   const roleSlug =
-    roleRef?.slug || (user.role === 'admin' ? 'super_admin' : user.role === 'user' ? 'staff' : user.role);
+    roleRef?.slug ||
+    (user.role === 'admin'
+      ? 'super_admin'
+      : user.role === 'student'
+        ? 'student'
+        : user.role === 'coach'
+          ? 'coach_portal'
+          : user.role === 'user'
+            ? 'staff'
+            : user.role);
+
+  const isStudent = user.role === 'student' || roleSlug === 'student' || Boolean(user.studentId);
+  // Portal coach (linked Coach entity) — not the admin-panel staff role slug "coach"
+  const isCoach =
+    Boolean(user.coachId) ||
+    user.role === 'coach' ||
+    roleSlug === 'coach_portal';
+  const isPortalUser = isStudent || isCoach;
+
+  const student = user.student
+    ? {
+        id: user.student.id,
+        registrationNumber: user.student.registrationNumber,
+        fullName: user.student.fullName,
+        photo: user.student.photo,
+        status: user.student.status,
+        mobileNumber: user.student.mobileNumber,
+        email: user.student.email,
+        batch: user.student.batch,
+        fatherName: user.student.fatherName,
+      }
+    : null;
+
+  const coach = user.coach
+    ? {
+        id: user.coach.id,
+        coachCode: user.coach.coachCode,
+        fullName: user.coach.fullName,
+        photo: user.coach.photo,
+        status: user.coach.status,
+        mobile: user.coach.mobile,
+        email: user.coach.email,
+        specialization: user.coach.specialization,
+        fatherName: user.coach.fatherName,
+      }
+    : null;
+
+  // Portal users never receive admin panel access
+  const safePermissions = isPortalUser ? [] : permissions;
+
+  let accountType = 'staff';
+  if (isStudent) accountType = 'student';
+  else if (isCoach) accountType = 'coach';
+
+  let roleName = roleRef?.name || 'User';
+  if (!roleRef) {
+    if (rest.role === 'admin') roleName = 'Super Admin';
+    else if (rest.role === 'student') roleName = 'Student';
+    else if (rest.role === 'coach') roleName = 'Coach';
+  }
 
   return {
     id: rest.id,
@@ -52,26 +111,40 @@ export function serializeUser(user, permissions = []) {
     role: rest.role,
     roleId: rest.roleId || null,
     roleSlug,
-    roleName: roleRef?.name || (rest.role === 'admin' ? 'Super Admin' : 'User'),
+    roleName,
     roleRef,
+    studentId: rest.studentId || null,
+    coachId: rest.coachId || null,
+    student,
+    coach,
+    accountType,
+    isStudent,
+    isCoach,
     isActive: rest.isActive,
     lastLoginAt: rest.lastLoginAt || null,
     createdAt: rest.createdAt,
     updatedAt: rest.updatedAt,
-    permissions,
-    canAccessAdmin: permissions.includes('dashboard.view') || permissions.length > 0 || rest.role === 'admin',
-    isSuperAdmin: roleSlug === 'super_admin' || (rest.role === 'admin' && !rest.roleId),
+    permissions: safePermissions,
+    canAccessAdmin: isPortalUser
+      ? false
+      : safePermissions.includes('dashboard.view') ||
+        safePermissions.length > 0 ||
+        rest.role === 'admin',
+    isSuperAdmin: !isPortalUser && (roleSlug === 'super_admin' || (rest.role === 'admin' && !rest.roleId)),
   };
 }
 
 export async function getUserPermissions(user) {
   if (!user) return [];
 
+  if (user.role === 'student' || user.studentId || user.role === 'coach' || user.coachId) {
+    return [];
+  }
+
   // Legacy admin without RBAC role → full access
   if (user.role === 'admin' && !user.roleId) {
     const all = await prisma.permission.findMany({ select: { key: true } });
     if (all.length) return all.map((p) => p.key);
-    // fallback if permissions not seeded yet
     return ['*.*'];
   }
 
@@ -87,6 +160,46 @@ export async function getUserPermissions(user) {
 export async function loadUserWithRole(userId) {
   return prisma.user.findUnique({
     where: { id: userId },
-    include: { roleRef: true },
+    include: {
+      roleRef: true,
+      student: {
+        select: {
+          id: true,
+          registrationNumber: true,
+          fullName: true,
+          photo: true,
+          status: true,
+          mobileNumber: true,
+          email: true,
+          batch: true,
+          fatherName: true,
+          motherName: true,
+          gender: true,
+          dateOfBirth: true,
+          address: true,
+          city: true,
+          state: true,
+          joiningDate: true,
+          membershipType: true,
+          trainingLevel: true,
+        },
+      },
+      coach: {
+        select: {
+          id: true,
+          coachCode: true,
+          fullName: true,
+          photo: true,
+          status: true,
+          mobile: true,
+          email: true,
+          specialization: true,
+          fatherName: true,
+          joiningDate: true,
+          experienceYears: true,
+          qualification: true,
+        },
+      },
+    },
   });
 }

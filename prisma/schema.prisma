@@ -10,6 +10,8 @@ datasource db {
 enum UserRole {
   admin
   user
+  student
+  coach
 }
 
 enum ContactStatus {
@@ -34,13 +36,21 @@ model User {
   password     String
   role         UserRole  @default(user)
   roleId       String?   @map("role_id")
+  studentId    String?   @unique @map("student_id")
+  coachId      String?   @unique @map("coach_id")
   isActive     Boolean   @default(true) @map("is_active")
   lastLoginAt  DateTime? @map("last_login_at")
+  passwordResetToken   String?   @map("password_reset_token") @db.VarChar(128)
+  passwordResetExpires DateTime? @map("password_reset_expires")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  roleRef   Role?      @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  auditLogs AuditLog[]
+  roleRef                   Role?               @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  student                   Student?            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  coach                     Coach?              @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  auditLogs                 AuditLog[]
+  attendanceSessionsCreated      AttendanceSession[]
+  coachAttendanceSessionsCreated CoachAttendanceSession[]
 
   @@index([roleId])
   @@index([isActive])
@@ -221,7 +231,7 @@ model Equipment {
   availableQuantity Int @default(0) @map("available_quantity")
 
   purchaseDate DateTime? @map("purchase_date")
-  purchaseCost Int? @map("purchase_cost")
+  purchaseCost Int? @default(0) @map("purchase_cost")
   supplier String? @db.VarChar(200)
 
   condition EquipmentCondition @default(Good)
@@ -494,10 +504,10 @@ model Student {
   trainingLevel TrainingLevel @map("training_level")
 
   // Physical
-  heightCm Int? @map("height_cm")
-  weightKg Int? @map("weight_kg")
-  chest Int? @map("chest")
-  age Int?
+  heightCm Int? @default(0) @map("height_cm")
+  weightKg Int? @default(0) @map("weight_kg")
+  chest Int? @default(0) @map("chest")
+  age Int? @default(0)
   category String? // as provided
 
   // Emergency
@@ -526,7 +536,10 @@ model Student {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  studentDocuments StudentDocument?
+  studentDocuments      StudentDocument?
+  loginAccount          User?
+  attendanceRecords     Attendance[]
+  attendanceSessionsUsed AttendanceSession[] @relation("AttendanceSessionUsedBy")
 
   @@index([status])
   @@index([coachId])
@@ -567,10 +580,10 @@ model Coach {
 
   address String? @db.VarChar(300)
 
-  experienceYears Int? @map("experience_years")
+  experienceYears Int? @default(0) @map("experience_years")
   specialization String? // comma-separated or single value
   qualification String?
-  salary Int?
+  salary Int? @default(0)
   joiningDate DateTime? @map("joining_date")
 
   status CoachStatus @default(Active)
@@ -589,6 +602,9 @@ model Coach {
 
   documents CoachDocument?
   students Student[]
+  attendanceRecords CoachAttendance[]
+  attendanceSessionsUsed CoachAttendanceSession[] @relation("CoachAttendanceSessionUsedBy")
+  loginAccount User?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -611,5 +627,126 @@ model CoachDocument {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("coach_documents")
+}
+
+// ---------------------------
+// QR Attendance Management
+// ---------------------------
+
+enum AttendanceSessionStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  CLOSED
+}
+
+enum AttendanceStatus {
+  present
+}
+
+model AttendanceSession {
+  id              String                  @id @default(uuid())
+  sessionCode     String                  @unique @map("session_code") @db.VarChar(40)
+  tokenHash       String                  @unique @map("token_hash") @db.VarChar(128)
+  displayToken    String?                 @map("display_token") @db.VarChar(128)
+  status          AttendanceSessionStatus @default(ACTIVE)
+  source          String                  @default("live") @db.VarChar(20)
+  expiresAt       DateTime                @map("expires_at")
+  usedAt          DateTime?               @map("used_at")
+  usedByStudentId String?                 @map("used_by_student_id")
+  usedByStudent   Student?                @relation("AttendanceSessionUsedBy", fields: [usedByStudentId], references: [id], onDelete: SetNull)
+  closedAt        DateTime?               @map("closed_at")
+  createdById     String?                 @map("created_by_id")
+  createdBy       User?                   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime                @default(now()) @map("created_at")
+  updatedAt       DateTime                @updatedAt @map("updated_at")
+
+  records Attendance[]
+
+  @@index([status])
+  @@index([expiresAt])
+  @@index([usedByStudentId])
+  @@index([source])
+  @@map("attendance_sessions")
+}
+
+model Attendance {
+  id                  String            @id @default(uuid())
+  studentId           String            @map("student_id")
+  student             Student           @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  attendanceSessionId String            @map("attendance_session_id")
+  session             AttendanceSession @relation(fields: [attendanceSessionId], references: [id], onDelete: Restrict)
+  registrationId      String            @map("registration_id") @db.VarChar(50)
+  date                DateTime          @db.Date
+  markedAt            DateTime          @default(now()) @map("marked_at")
+  status              AttendanceStatus  @default(present)
+  source              String            @default("live") @db.VarChar(20)
+  createdAt           DateTime          @default(now()) @map("created_at")
+
+  @@unique([studentId, attendanceSessionId])
+  @@unique([studentId, date])
+  @@index([date])
+  @@index([registrationId])
+  @@index([markedAt])
+  @@index([status])
+  @@index([studentId, date])
+  @@index([attendanceSessionId])
+  @@index([source])
+  @@map("attendance")
+}
+
+// ---------------------------
+// Coach QR Attendance (separate from student attendance)
+// ---------------------------
+
+model CoachAttendanceSession {
+  id            String                  @id @default(uuid())
+  sessionCode   String                  @unique @map("session_code") @db.VarChar(40)
+  tokenHash     String                  @unique @map("token_hash") @db.VarChar(128)
+  displayToken  String?                 @map("display_token") @db.VarChar(128)
+  status        AttendanceSessionStatus @default(ACTIVE)
+  source        String                  @default("live") @db.VarChar(20)
+  expiresAt     DateTime                @map("expires_at")
+  usedAt        DateTime?               @map("used_at")
+  usedByCoachId String?                 @map("used_by_coach_id")
+  usedByCoach   Coach?                  @relation("CoachAttendanceSessionUsedBy", fields: [usedByCoachId], references: [id], onDelete: SetNull)
+  closedAt      DateTime?               @map("closed_at")
+  createdById   String?                 @map("created_by_id")
+  createdBy     User?                   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime                @default(now()) @map("created_at")
+  updatedAt     DateTime                @updatedAt @map("updated_at")
+
+  records CoachAttendance[]
+
+  @@index([status])
+  @@index([expiresAt])
+  @@index([usedByCoachId])
+  @@index([source])
+  @@map("coach_attendance_sessions")
+}
+
+model CoachAttendance {
+  id                  String                 @id @default(uuid())
+  coachId             String                 @map("coach_id")
+  coach               Coach                  @relation(fields: [coachId], references: [id], onDelete: Restrict)
+  attendanceSessionId String                 @map("attendance_session_id")
+  session             CoachAttendanceSession @relation(fields: [attendanceSessionId], references: [id], onDelete: Restrict)
+  coachCode           String                 @map("coach_code") @db.VarChar(50)
+  date                DateTime               @db.Date
+  markedAt            DateTime               @default(now()) @map("marked_at")
+  status              AttendanceStatus       @default(present)
+  source              String                 @default("live") @db.VarChar(20)
+  createdAt           DateTime               @default(now()) @map("created_at")
+
+  @@unique([coachId, attendanceSessionId])
+  @@unique([coachId, date])
+  @@index([date])
+  @@index([coachCode])
+  @@index([markedAt])
+  @@index([status])
+  @@index([coachId, date])
+  @@index([attendanceSessionId])
+  @@index([source])
+  @@map("coach_attendance")
 }
 

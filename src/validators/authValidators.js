@@ -9,7 +9,27 @@ export const registerValidation = [
 ];
 
 export const loginValidation = [
-  body('email').trim().isEmail().withMessage('Valid email is required').normalizeEmail(),
+  body('login')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Login ID is required'),
+  body('email')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required'),
+  body('username')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Username is required'),
+  body().custom((_, { req }) => {
+    if (!req.body.login && !req.body.email && !req.body.username) {
+      throw new Error('Login ID or email is required');
+    }
+    return true;
+  }),
   body('password').notEmpty().withMessage('Password is required'),
 ];
 

@@ -113,12 +113,54 @@ async function sendViaGmail({ to, subject, html, replyTo }) {
     replyTo,
     subject,
     html,
-    // Helps some clients show brand name instead of collapsing to "me"
     headers: {
       'X-Entity-Ref-ID': `akhada-contact-${Date.now()}`,
     },
   });
   return true;
+}
+
+/**
+ * Send password reset link to student/coach/staff.
+ * Returns true if emailed successfully.
+ */
+export async function sendPasswordResetEmail({ to, name, resetUrl, expiresInHours = 1 }) {
+  if (!to) return false;
+
+  const html = `
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#f1f5f9;padding:24px;">
+    <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+      <div style="background:linear-gradient(135deg,#2563EB,#1D4ED8);padding:20px 24px;">
+        <h1 style="margin:0;color:#ffffff;font-size:18px;">${escapeHtml(BRAND_NAME)}</h1>
+        <p style="margin:4px 0 0;color:#eff6ff;font-size:13px;">Password reset</p>
+      </div>
+      <div style="padding:20px 24px;color:#1e293b;font-size:14px;line-height:1.6;">
+        <p>Hello ${escapeHtml(name || 'there')},</p>
+        <p>We received a request to reset your password. Click the button below to choose a new password. This link expires in ${expiresInHours} hour(s) and can be used only once.</p>
+        <p style="text-align:center;margin:28px 0;">
+          <a href="${escapeHtml(resetUrl)}" style="display:inline-block;background:#2563EB;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">Reset Password</a>
+        </p>
+        <p style="font-size:12px;color:#64748b;word-break:break-all;">Or copy this link:<br/>${escapeHtml(resetUrl)}</p>
+        <p style="font-size:12px;color:#64748b;">If you did not request this, you can ignore this email.</p>
+      </div>
+    </div>
+  </div>`;
+
+  const subject = `${BRAND_NAME}: Reset your password`;
+  let sent = false;
+  try {
+    sent = await sendViaResend({ to, subject, html });
+  } catch (err) {
+    console.error('Resend password reset failed:', err.message);
+  }
+  if (!sent) {
+    try {
+      sent = await sendViaGmail({ to, subject, html });
+    } catch (err) {
+      console.error('Gmail password reset failed:', err.message);
+    }
+  }
+  return sent;
 }
 
 async function sendViaResend({ to, subject, html, replyTo }) {

@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import bcrypt from 'bcryptjs';
 import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
@@ -7,7 +8,52 @@ import { withId, withIds } from '../utils/serialize.js';
 import { deleteUploadedFile, toPublicPath, ENTRY_PHOTOS_DIR, ENTRY_DOCS_DIR, COACH_CERTS_DIR, ENTRY_EQUIPMENT_DIR, VIDEOS_DIR, QR_DIR } from '../middleware/upload.js';
 import ExcelJS from 'exceljs';
 import { centerCropSquareToJpg } from '../services/imageCropService.js';
+import { cell0 } from '../utils/zeroEmpty.js';
 
+const STRONG_PASSWORD = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+
+async function ensureStudentRole() {
+  let role = await prisma.role.findUnique({ where: { slug: 'student' } });
+  if (!role) {
+    role = await prisma.role.create({
+      data: {
+        name: 'Student',
+        slug: 'student',
+        description: 'Student portal only — profile, QR scan and own attendance.',
+        isSystem: true,
+      },
+    });
+  }
+  return role;
+}
+
+async function ensureCoachPortalRole() {
+  let role = await prisma.role.findUnique({ where: { slug: 'coach_portal' } });
+  if (!role) {
+    role = await prisma.role.create({
+      data: {
+        name: 'Coach Portal',
+        slug: 'coach_portal',
+        description: 'Coach user panel only — profile, own attendance and account.',
+        isSystem: true,
+      },
+    });
+  }
+  return role;
+}
+
+function studentLoginEmail(registrationNumber, email) {
+  if (email && String(email).trim()) return String(email).trim().toLowerCase();
+  return `${String(registrationNumber).toLowerCase()}@student.akhada.local`;
+}
+
+function coachLoginEmail(coachCode, email) {
+  if (email && String(email).trim()) return String(email).trim().toLowerCase();
+  return `${String(coachCode).toLowerCase()}@coach.akhada.local`;
+}
+
+const USERNAME_TAKEN = 'This username is already in use. Please choose another username.';
+const INACTIVE_ACCOUNT = 'Your account is currently inactive. Please contact the administrator.';
 const getClientBaseUrl = () => {
   const raw = process.env.CLIENT_URL || 'http://localhost:5173';
   // allowedOrigins can be comma-separated
@@ -106,7 +152,19 @@ function buildExcelBuffer(rows, columns, sheetName = 'Export') {
     sheet.columns = columns.map((c) => ({ header: c.label, key: c.key, width: c.width || 22 }));
     sheet.getRow(1).font = { bold: true };
     sheet.getRow(1).alignment = { vertical: 'middle' };
-    rows.forEach((r) => sheet.addRow(r));
+    rows.forEach((r) => {
+      const safe = {};
+      for (const c of columns) safe[c.key] = cell0(r?.[c.key]);
+      sheet.addRow(safe);
+    });
+    for (let r = 2; r <= sheet.rowCount; r += 1) {
+      for (let c = 1; c <= columns.length; c += 1) {
+        const cell = sheet.getRow(r).getCell(c);
+        if (cell.value === null || cell.value === undefined || cell.value === '' || cell.value === '—') {
+          cell.value = 0;
+        }
+      }
+    }
     return workbook.xlsx.writeBuffer();
   })();
 }
@@ -260,15 +318,32 @@ export const createStudent = asyncHandler(async (req, res) => {
     attendanceTotal,
     attendancePresent,
     attendanceAbsent,
+    password,
+    confirmPassword,
+    loginUsername,
   } = req.body;
 
   if (!fullName || !fatherName || !motherName) throw new ApiError(400, 'Missing student personal fields');
   if (!mobileNumber) throw new ApiError(400, 'Mobile number is required');
   if (!aadhaarNumber || !panNumber) throw new ApiError(400, 'Aadhaar number and PAN number are required');
+  if (!password || !confirmPassword) throw new ApiError(400, 'Login password and confirm password are required');
+  if (password !== confirmPassword) throw new ApiError(400, 'Passwords do not match');
+  if (!STRONG_PASSWORD.test(password)) {
+    throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+  }
 
   await assertUniqueAcrossTables({ aadhaarNumber, panNumber, mode: 'student' });
 
   const registrationNumber = await generateStudentRegNo();
+  const username = String(loginUsername || registrationNumber).trim().toLowerCase();
+  const userEmail = studentLoginEmail(registrationNumber, email);
+
+  if (await prisma.user.findUnique({ where: { username } })) {
+    throw new ApiError(400, USERNAME_TAKEN);
+  }
+  if (await prisma.user.findUnique({ where: { email: userEmail } })) {
+    throw new ApiError(400, 'Email is already registered as a login account');
+  }
 
   const photo = await processEntryPhoto(photoUpload, {
     prefix: `student-${registrationNumber}`,
@@ -278,8 +353,10 @@ export const createStudent = asyncHandler(async (req, res) => {
   const aadhaarBackImage = aadhaarBackUpload ? toPublicPath(aadhaarBackUpload.filename, 'entry/documents') : null;
   const panCardImage = panCardUpload ? toPublicPath(panCardUpload.filename, 'entry/documents') : null;
 
-  // QR Code removed (no file generation)
   const qrCodePath = null;
+  const studentRole = await ensureStudentRole();
+  const passwordHash = await bcrypt.hash(password, 12);
+  const accountActive = (status || 'Active') === 'Active';
 
   const created = await prisma.$transaction(async (tx) => {
     const student = await tx.student.create({
@@ -313,10 +390,10 @@ export const createStudent = asyncHandler(async (req, res) => {
         coachId: coachId || null,
         trainingLevel: trainingLevel || 'Beginner',
 
-        heightCm: heightCm ? Number(heightCm) : null,
-        weightKg: weightKg ? Number(weightKg) : null,
-        chest: chest ? Number(chest) : null,
-        age: age ? Number(age) : null,
+        heightCm: heightCm ? Number(heightCm) : 0,
+        weightKg: weightKg ? Number(weightKg) : 0,
+        chest: chest ? Number(chest) : 0,
+        age: age ? Number(age) : 0,
         category: category || null,
 
         guardianName: guardianName || null,
@@ -346,10 +423,32 @@ export const createStudent = asyncHandler(async (req, res) => {
       },
     });
 
+    await tx.user.create({
+      data: {
+        name: String(fullName).trim(),
+        username,
+        email: userEmail,
+        mobile: String(mobileNumber).replace(/\D/g, '').slice(-10),
+        password: passwordHash,
+        role: 'student',
+        roleId: studentRole.id,
+        studentId: student.id,
+        isActive: accountActive,
+        profileImage: photo,
+      },
+    });
+
     return student;
   });
 
-  res.status(201).json({ success: true, data: { student: withId(created) }, message: 'Student created' });
+  res.status(201).json({
+    success: true,
+    data: {
+      student: withId(created),
+      login: { username, email: userEmail },
+    },
+    message: 'Student created with login credentials',
+  });
 });
 
 // NOTE: For Phase-1 we implement update/delete/get for students with minimal file replacement handling.
@@ -441,10 +540,10 @@ export const updateStudent = asyncHandler(async (req, res) => {
         coachId: req.body.coachId !== undefined ? req.body.coachId || null : student.coachId,
         trainingLevel: req.body.trainingLevel !== undefined ? req.body.trainingLevel : student.trainingLevel,
 
-        heightCm: req.body.heightCm !== undefined ? Number(req.body.heightCm) || null : student.heightCm,
-        weightKg: req.body.weightKg !== undefined ? Number(req.body.weightKg) || null : student.weightKg,
-        chest: req.body.chest !== undefined ? Number(req.body.chest) || null : student.chest,
-        age: req.body.age !== undefined ? Number(req.body.age) || null : student.age,
+        heightCm: req.body.heightCm !== undefined ? Number(req.body.heightCm) || 0 : student.heightCm,
+        weightKg: req.body.weightKg !== undefined ? Number(req.body.weightKg) || 0 : student.weightKg,
+        chest: req.body.chest !== undefined ? Number(req.body.chest) || 0 : student.chest,
+        age: req.body.age !== undefined ? Number(req.body.age) || 0 : student.age,
         category: req.body.category !== undefined ? req.body.category || null : student.category,
 
         guardianName: req.body.guardianName !== undefined ? req.body.guardianName || null : student.guardianName,
@@ -474,6 +573,58 @@ export const updateStudent = asyncHandler(async (req, res) => {
 
     return next;
   });
+
+  // Sync linked student login account
+  const loginUser = await prisma.user.findUnique({ where: { studentId: updated.id } });
+  if (loginUser) {
+    const userData = {
+      name: updated.fullName,
+      mobile: String(updated.mobileNumber || '').replace(/\D/g, '').slice(-10) || null,
+      profileImage: updated.photo,
+      isActive: updated.status === 'Active',
+    };
+    if (req.body.password) {
+      if (req.body.password !== req.body.confirmPassword) {
+        throw new ApiError(400, 'Passwords do not match');
+      }
+      if (!STRONG_PASSWORD.test(req.body.password)) {
+        throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+      }
+      userData.password = await bcrypt.hash(req.body.password, 12);
+    }
+    await prisma.user.update({ where: { id: loginUser.id }, data: userData });
+  } else if (req.body.password) {
+    // Create login for older students without account
+    if (req.body.password !== req.body.confirmPassword) {
+      throw new ApiError(400, 'Passwords do not match');
+    }
+    if (!STRONG_PASSWORD.test(req.body.password)) {
+      throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+    }
+    const studentRole = await ensureStudentRole();
+    const username = updated.registrationNumber.toLowerCase();
+    const userEmail = studentLoginEmail(updated.registrationNumber, updated.email);
+    if (await prisma.user.findUnique({ where: { username } })) {
+      throw new ApiError(400, USERNAME_TAKEN);
+    }
+    if (await prisma.user.findUnique({ where: { email: userEmail } })) {
+      throw new ApiError(400, 'Email is already registered as a login account');
+    }
+    await prisma.user.create({
+      data: {
+        name: updated.fullName,
+        username,
+        email: userEmail,
+        mobile: String(updated.mobileNumber || '').replace(/\D/g, '').slice(-10) || null,
+        password: await bcrypt.hash(req.body.password, 12),
+        role: 'student',
+        roleId: studentRole.id,
+        studentId: updated.id,
+        isActive: updated.status === 'Active',
+        profileImage: updated.photo,
+      },
+    });
+  }
 
   res.json({ success: true, data: { student: withId(updated) }, message: 'Student updated' });
 });
@@ -541,8 +692,8 @@ export const exportStudents = asyncHandler(async (req, res) => {
     status: s.status,
     membershipType: s.membershipType,
     batch: s.batch,
-    coachName: s.coach?.fullName || '',
-    joiningDate: s.joiningDate ? new Date(s.joiningDate).toLocaleDateString('en-IN') : '',
+    coachName: s.coach?.fullName || 0,
+    joiningDate: s.joiningDate ? new Date(s.joiningDate).toLocaleDateString('en-IN') : 0,
     mobileNumber: s.mobileNumber,
     aadhaarNumber: s.aadhaarNumber,
     panNumber: s.panNumber,
@@ -574,7 +725,7 @@ export const exportStudents = asyncHandler(async (req, res) => {
 
   // CSV
   const header = columns.map((c) => `"${c.label}"`).join(',');
-  const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const escape = (v) => `"${String(v ?? 0).replace(/"/g, '""')}"`;
   const csv = [header, ...rows.map((r) => columns.map((c) => escape(r[c.key])).join(','))].join('\r\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="students-${timestamp}.csv"`);
@@ -618,13 +769,34 @@ export const listCoachesAdmin = asyncHandler(async (req, res) => {
       orderBy: { createdAt: 'desc' },
       skip: (page - 1) * limit,
       take: limit,
+      include: {
+        loginAccount: { select: { id: true, username: true, email: true, isActive: true } },
+      },
     }),
   ]);
+
+  let attendanceByCoach = new Map();
+  try {
+    const { calculateCoachAttendanceSummary } = await import('../services/coachAttendanceCalc.js');
+    const summary = await calculateCoachAttendanceSummary({ period: 'month' });
+    for (const row of summary?.coaches || summary?.coachRows || []) {
+      attendanceByCoach.set(row.coachId, row.attendancePercentage ?? 0);
+    }
+  } catch {
+    attendanceByCoach = new Map();
+  }
+
+  const coaches = withIds(items).map((c) => ({
+    ...c,
+    username: c.loginAccount?.username || 0,
+    accountStatus: c.loginAccount ? (c.loginAccount.isActive && c.status === 'Active' ? 'Active' : 'Inactive') : c.status,
+    attendancePercentage: attendanceByCoach.get(c.id) ?? 0,
+  }));
 
   res.json({
     success: true,
     data: {
-      coaches: withIds(items),
+      coaches,
       pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
     },
   });
@@ -633,10 +805,23 @@ export const listCoachesAdmin = asyncHandler(async (req, res) => {
 export const getCoachById = asyncHandler(async (req, res) => {
   const coach = await prisma.coach.findUnique({
     where: { id: req.params.id },
-    include: { documents: true },
+    include: {
+      documents: true,
+      loginAccount: { select: { id: true, username: true, email: true, isActive: true, lastLoginAt: true } },
+    },
   });
   if (!coach) throw new ApiError(404, 'Coach not found');
-  res.json({ success: true, data: { coach: withId(coach) } });
+  const safe = withId(coach);
+  res.json({
+    success: true,
+    data: {
+      coach: {
+        ...safe,
+        username: safe.loginAccount?.username || 0,
+        hasLoginAccount: Boolean(safe.loginAccount),
+      },
+    },
+  });
 });
 
 export const createCoach = asyncHandler(async (req, res) => {
@@ -648,15 +833,54 @@ export const createCoach = asyncHandler(async (req, res) => {
   const aadhaarBackUpload = files.aadhaarBack?.[0];
   const panCardUpload = files.panCard?.[0];
 
-  const { fullName, fatherName, mobile, email, dateOfBirth, address, experienceYears, specialization, qualification, salary, joiningDate, status, aadhaarNumber, panNumber, achievements, biography, socialLinks } = req.body;
+  const {
+    fullName,
+    fatherName,
+    mobile,
+    email,
+    dateOfBirth,
+    address,
+    experienceYears,
+    specialization,
+    qualification,
+    salary,
+    joiningDate,
+    status,
+    aadhaarNumber,
+    panNumber,
+    achievements,
+    biography,
+    socialLinks,
+    password,
+    confirmPassword,
+    loginUsername,
+  } = req.body;
 
   if (!fullName || !fatherName || !mobile) throw new ApiError(400, 'Missing coach fields');
   if (!aadhaarNumber || !panNumber) throw new ApiError(400, 'Aadhaar number and PAN number are required');
+  if (!password || !confirmPassword) throw new ApiError(400, 'Login password and confirm password are required');
+  if (password !== confirmPassword) throw new ApiError(400, 'Passwords do not match');
+  if (!STRONG_PASSWORD.test(password)) {
+    throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+  }
 
-  // duplicate checks across tables
-  await assertUniqueAcrossTables({ aadhaarNumber: String(aadhaarNumber).trim(), panNumber: String(panNumber).trim(), mode: 'coach' });
+  await assertUniqueAcrossTables({
+    aadhaarNumber: String(aadhaarNumber).trim(),
+    panNumber: String(panNumber).trim(),
+    mode: 'coach',
+  });
 
   const coachCode = await generateCoachCode();
+  const username = String(loginUsername || coachCode).trim().toLowerCase();
+  if (!username) throw new ApiError(400, 'Username is required');
+  const userEmail = coachLoginEmail(coachCode, email);
+
+  if (await prisma.user.findUnique({ where: { username } })) {
+    throw new ApiError(400, USERNAME_TAKEN);
+  }
+  if (await prisma.user.findUnique({ where: { email: userEmail } })) {
+    throw new ApiError(400, 'Email is already registered as a login account');
+  }
 
   const photo = await processEntryPhoto(photoUpload, {
     prefix: `coach-${coachCode}`,
@@ -669,8 +893,10 @@ export const createCoach = asyncHandler(async (req, res) => {
   const certFiles = files.certificates || [];
   const certificates = certFiles.map((f) => toPublicPath(f.filename, 'entry/coach-certificates'));
 
-  // QR Code removed (no file generation)
   const qrCodePath = null;
+  const coachRole = await ensureCoachPortalRole();
+  const passwordHash = await bcrypt.hash(password, 12);
+  const accountActive = (status || 'Active') === 'Active';
 
   const created = await prisma.$transaction(async (tx) => {
     const coach = await tx.coach.create({
@@ -683,10 +909,10 @@ export const createCoach = asyncHandler(async (req, res) => {
         email: email || null,
         dateOfBirth: new Date(dateOfBirth),
         address: address || null,
-        experienceYears: experienceYears ? Number(experienceYears) : null,
+        experienceYears: experienceYears ? Number(experienceYears) : 0,
         specialization: specialization || null,
         qualification: qualification || null,
-        salary: salary ? Number(salary) : null,
+        salary: salary ? Number(salary) : 0,
         joiningDate: joiningDate ? new Date(joiningDate) : null,
         status: status || 'Active',
         aadhaarNumber: String(aadhaarNumber).trim(),
@@ -708,10 +934,32 @@ export const createCoach = asyncHandler(async (req, res) => {
       },
     });
 
+    await tx.user.create({
+      data: {
+        name: String(fullName).trim(),
+        username,
+        email: userEmail,
+        mobile: String(mobile).replace(/\D/g, '').slice(-10),
+        password: passwordHash,
+        role: 'coach',
+        roleId: coachRole.id,
+        coachId: coach.id,
+        isActive: accountActive,
+        profileImage: photo,
+      },
+    });
+
     return coach;
   });
 
-  res.status(201).json({ success: true, data: { coach: withId(created) }, message: 'Coach created' });
+  res.status(201).json({
+    success: true,
+    data: {
+      coach: withId(created),
+      login: { username, email: userEmail },
+    },
+    message: 'Coach created with login credentials',
+  });
 });
 
 export const updateCoach = asyncHandler(async (req, res) => {
@@ -777,10 +1025,10 @@ export const updateCoach = asyncHandler(async (req, res) => {
         email: req.body.email !== undefined ? req.body.email || null : coach.email,
         dateOfBirth: req.body.dateOfBirth ? new Date(req.body.dateOfBirth) : coach.dateOfBirth,
         address: req.body.address !== undefined ? req.body.address || null : coach.address,
-        experienceYears: req.body.experienceYears !== undefined ? Number(req.body.experienceYears) : coach.experienceYears,
+        experienceYears: req.body.experienceYears !== undefined ? Number(req.body.experienceYears) || 0 : coach.experienceYears,
         specialization: req.body.specialization !== undefined ? req.body.specialization || null : coach.specialization,
         qualification: req.body.qualification !== undefined ? req.body.qualification || null : coach.qualification,
-        salary: req.body.salary !== undefined ? Number(req.body.salary) : coach.salary,
+        salary: req.body.salary !== undefined ? Number(req.body.salary) || 0 : coach.salary,
         joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : coach.joiningDate,
         status: req.body.status !== undefined ? req.body.status : coach.status,
         aadhaarNumber: nextAadhaarNumber,
@@ -793,7 +1041,200 @@ export const updateCoach = asyncHandler(async (req, res) => {
     });
   });
 
+  // Sync linked coach login account
+  const loginUser = await prisma.user.findUnique({ where: { coachId: updated.id } });
+  if (loginUser) {
+    const userData = {
+      name: updated.fullName,
+      mobile: String(updated.mobile || '').replace(/\D/g, '').slice(-10) || null,
+      profileImage: updated.photo,
+      isActive: updated.status === 'Active',
+    };
+    if (req.body.loginUsername !== undefined && String(req.body.loginUsername).trim()) {
+      const nextUsername = String(req.body.loginUsername).trim().toLowerCase();
+      if (nextUsername !== loginUser.username) {
+        const taken = await prisma.user.findUnique({ where: { username: nextUsername } });
+        if (taken && taken.id !== loginUser.id) throw new ApiError(400, USERNAME_TAKEN);
+        userData.username = nextUsername;
+      }
+    }
+    if (req.body.password) {
+      if (req.body.password !== req.body.confirmPassword) {
+        throw new ApiError(400, 'Passwords do not match');
+      }
+      if (!STRONG_PASSWORD.test(req.body.password)) {
+        throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+      }
+      userData.password = await bcrypt.hash(req.body.password, 12);
+      userData.passwordResetToken = null;
+      userData.passwordResetExpires = null;
+    }
+    await prisma.user.update({ where: { id: loginUser.id }, data: userData });
+  } else if (req.body.password) {
+    if (req.body.password !== req.body.confirmPassword) {
+      throw new ApiError(400, 'Passwords do not match');
+    }
+    if (!STRONG_PASSWORD.test(req.body.password)) {
+      throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+    }
+    const coachRole = await ensureCoachPortalRole();
+    const username = String(req.body.loginUsername || updated.coachCode).trim().toLowerCase();
+    const userEmail = coachLoginEmail(updated.coachCode, updated.email);
+    if (await prisma.user.findUnique({ where: { username } })) {
+      throw new ApiError(400, USERNAME_TAKEN);
+    }
+    if (await prisma.user.findUnique({ where: { email: userEmail } })) {
+      throw new ApiError(400, 'Email is already registered as a login account');
+    }
+    await prisma.user.create({
+      data: {
+        name: updated.fullName,
+        username,
+        email: userEmail,
+        mobile: String(updated.mobile || '').replace(/\D/g, '').slice(-10) || null,
+        password: await bcrypt.hash(req.body.password, 12),
+        role: 'coach',
+        roleId: coachRole.id,
+        coachId: updated.id,
+        isActive: updated.status === 'Active',
+        profileImage: updated.photo,
+      },
+    });
+  }
+
   res.json({ success: true, data: { coach: withId(updated) }, message: 'Coach updated' });
+});
+
+export const resetCoachPassword = asyncHandler(async (req, res) => {
+  const coach = await prisma.coach.findUnique({ where: { id: req.params.id } });
+  if (!coach) throw new ApiError(404, 'Coach not found');
+
+  const { password, confirmPassword } = req.body;
+  if (!password || password !== confirmPassword) {
+    throw new ApiError(400, 'Password and confirm password must match');
+  }
+  if (!STRONG_PASSWORD.test(password)) {
+    throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+  }
+
+  let loginUser = await prisma.user.findUnique({ where: { coachId: coach.id } });
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  if (loginUser) {
+    await prisma.user.update({
+      where: { id: loginUser.id },
+      data: {
+        password: passwordHash,
+        passwordResetToken: null,
+        passwordResetExpires: null,
+      },
+    });
+  } else {
+    const coachRole = await ensureCoachPortalRole();
+    const username = coach.coachCode.toLowerCase();
+    const userEmail = coachLoginEmail(coach.coachCode, coach.email);
+    if (await prisma.user.findUnique({ where: { username } })) {
+      throw new ApiError(400, USERNAME_TAKEN);
+    }
+    if (await prisma.user.findUnique({ where: { email: userEmail } })) {
+      throw new ApiError(400, 'Email is already registered as a login account');
+    }
+    loginUser = await prisma.user.create({
+      data: {
+        name: coach.fullName,
+        username,
+        email: userEmail,
+        mobile: String(coach.mobile || '').replace(/\D/g, '').slice(-10) || null,
+        password: passwordHash,
+        role: 'coach',
+        roleId: coachRole.id,
+        coachId: coach.id,
+        isActive: coach.status === 'Active',
+        profileImage: coach.photo,
+      },
+    });
+  }
+
+  const { writeAuditLog } = await import('../utils/rbac.js');
+  await writeAuditLog({
+    userId: req.user?.id,
+    action: 'reset_password',
+    entity: 'coach',
+    entityId: coach.id,
+    req,
+  });
+
+  res.json({
+    success: true,
+    message: 'Coach password reset successfully',
+    data: { username: loginUser.username },
+  });
+});
+
+export const resetStudentPassword = asyncHandler(async (req, res) => {
+  const student = await prisma.student.findUnique({ where: { id: req.params.id } });
+  if (!student) throw new ApiError(404, 'Student not found');
+
+  const { password, confirmPassword } = req.body;
+  if (!password || password !== confirmPassword) {
+    throw new ApiError(400, 'Password and confirm password must match');
+  }
+  if (!STRONG_PASSWORD.test(password)) {
+    throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
+  }
+
+  let loginUser = await prisma.user.findUnique({ where: { studentId: student.id } });
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  if (loginUser) {
+    await prisma.user.update({
+      where: { id: loginUser.id },
+      data: {
+        password: passwordHash,
+        passwordResetToken: null,
+        passwordResetExpires: null,
+      },
+    });
+  } else {
+    const studentRole = await ensureStudentRole();
+    const username = student.registrationNumber.toLowerCase();
+    const userEmail = studentLoginEmail(student.registrationNumber, student.email);
+    if (await prisma.user.findUnique({ where: { username } })) {
+      throw new ApiError(400, USERNAME_TAKEN);
+    }
+    if (await prisma.user.findUnique({ where: { email: userEmail } })) {
+      throw new ApiError(400, 'Email is already registered as a login account');
+    }
+    loginUser = await prisma.user.create({
+      data: {
+        name: student.fullName,
+        username,
+        email: userEmail,
+        mobile: String(student.mobileNumber || '').replace(/\D/g, '').slice(-10) || null,
+        password: passwordHash,
+        role: 'student',
+        roleId: studentRole.id,
+        studentId: student.id,
+        isActive: student.status === 'Active',
+        profileImage: student.photo,
+      },
+    });
+  }
+
+  const { writeAuditLog } = await import('../utils/rbac.js');
+  await writeAuditLog({
+    userId: req.user?.id,
+    action: 'reset_password',
+    entity: 'student',
+    entityId: student.id,
+    req,
+  });
+
+  res.json({
+    success: true,
+    message: 'Student password reset successfully',
+    data: { username: loginUser.username },
+  });
 });
 
 export const deleteCoach = asyncHandler(async (req, res) => {
@@ -849,13 +1290,13 @@ export const exportCoaches = asyncHandler(async (req, res) => {
     fullName: c.fullName,
     fatherName: c.fatherName,
     mobile: c.mobile,
-    email: c.email || '',
+    email: c.email || 0,
     status: c.status,
-    specialization: c.specialization || '',
-    qualification: c.qualification || '',
-    experienceYears: c.experienceYears ?? '',
-    salary: c.salary ?? '',
-    joiningDate: c.joiningDate ? new Date(c.joiningDate).toLocaleDateString('en-IN') : '',
+    specialization: c.specialization || 0,
+    qualification: c.qualification || 0,
+    experienceYears: c.experienceYears ?? 0,
+    salary: c.salary ?? 0,
+    joiningDate: c.joiningDate ? new Date(c.joiningDate).toLocaleDateString('en-IN') : 0,
     aadhaarNumber: c.aadhaarNumber,
     panNumber: c.panNumber,
   }));
@@ -886,7 +1327,7 @@ export const exportCoaches = asyncHandler(async (req, res) => {
   }
 
   const header = columns.map((c) => `"${c.label}"`).join(',');
-  const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const escape = (v) => `"${String(v ?? 0).replace(/"/g, '""')}"`;
   const csv = [header, ...rows.map((r) => columns.map((c) => escape(r[c.key])).join(','))].join('\r\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="coaches-${timestamp}.csv"`);
@@ -988,7 +1429,7 @@ export const createEquipment = asyncHandler(async (req, res) => {
       quantity: quantity ? Number(quantity) : 0,
       availableQuantity: availableQuantity ? Number(availableQuantity) : 0,
       purchaseDate: purchaseDate ? new Date(purchaseDate) : null,
-      purchaseCost: purchaseCost ? Number(purchaseCost) : null,
+      purchaseCost: purchaseCost ? Number(purchaseCost) : 0,
       supplier: supplier || null,
 
       condition: condition || 'Good',
@@ -1035,7 +1476,7 @@ export const updateEquipment = asyncHandler(async (req, res) => {
         quantity: req.body.quantity !== undefined ? Number(req.body.quantity) : existing.quantity,
         availableQuantity: req.body.availableQuantity !== undefined ? Number(req.body.availableQuantity) : existing.availableQuantity,
         purchaseDate: req.body.purchaseDate ? new Date(req.body.purchaseDate) : existing.purchaseDate,
-        purchaseCost: req.body.purchaseCost !== undefined ? Number(req.body.purchaseCost) : existing.purchaseCost,
+        purchaseCost: req.body.purchaseCost !== undefined ? Number(req.body.purchaseCost) || 0 : existing.purchaseCost,
         supplier: req.body.supplier !== undefined ? req.body.supplier || null : existing.supplier,
         condition: req.body.condition !== undefined ? req.body.condition : existing.condition,
         location: req.body.location !== undefined ? req.body.location || null : existing.location,
@@ -1125,20 +1566,20 @@ export const exportEquipment = asyncHandler(async (req, res) => {
 
   const rows = equipment.map((e, idx) => ({
     serial: idx + 1,
-    equipmentCode: e.equipmentCode || '',
+    equipmentCode: e.equipmentCode || 0,
     title: e.title,
-    category: e.category || '',
+    category: e.category || 0,
     status: e.status,
     condition: e.condition,
-    quantity: e.quantity,
-    availableQuantity: e.availableQuantity,
-    location: e.location || '',
-    rackNumber: e.rackNumber || '',
-    supplier: e.supplier || '',
-    purchaseDate: e.purchaseDate ? new Date(e.purchaseDate).toLocaleDateString('en-IN') : '',
-    purchaseCost: e.purchaseCost ?? '',
-    barcodeValue: e.barcodeValue || '',
-    remarks: e.remarks || '',
+    quantity: e.quantity ?? 0,
+    availableQuantity: e.availableQuantity ?? 0,
+    location: e.location || 0,
+    rackNumber: e.rackNumber || 0,
+    supplier: e.supplier || 0,
+    purchaseDate: e.purchaseDate ? new Date(e.purchaseDate).toLocaleDateString('en-IN') : 0,
+    purchaseCost: e.purchaseCost ?? 0,
+    barcodeValue: e.barcodeValue || 0,
+    remarks: e.remarks || 0,
   }));
 
   const columns = [
@@ -1168,7 +1609,7 @@ export const exportEquipment = asyncHandler(async (req, res) => {
   }
 
   const header = columns.map((c) => `"${c.label}"`).join(',');
-  const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const escape = (v) => `"${String(v ?? 0).replace(/"/g, '""')}"`;
   const csv = [header, ...rows.map((r) => columns.map((c) => escape(r[c.key])).join(','))].join('\r\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="equipment-${timestamp}.csv"`);

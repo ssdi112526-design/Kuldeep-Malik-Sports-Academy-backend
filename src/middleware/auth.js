@@ -114,10 +114,62 @@ export const requireAnyPermission = (...keys) => (req, res, next) => {
   next();
 };
 
-/** Must be able to open admin panel */
+/** Must be able to open admin panel — students and portal coaches always rejected */
 export const requireAdminAccess = (req, res, next) => {
+  if (
+    req.user?.isStudent ||
+    req.user?.isCoach ||
+    req.user?.role === 'student' ||
+    req.user?.role === 'coach' ||
+    req.user?.accountType === 'student' ||
+    req.user?.accountType === 'coach'
+  ) {
+    return next(new ApiError(403, "You don't have permission to access the admin panel."));
+  }
   if (!req.user?.canAccessAdmin && !req.user?.isSuperAdmin && req.user?.role !== 'admin') {
     return next(new ApiError(403, "You don't have permission to access the admin panel."));
+  }
+  next();
+};
+
+/** Student portal only */
+export const requireStudent = (req, res, next) => {
+  if (!req.user) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  if (!req.user.isStudent && req.user.role !== 'student' && req.user.accountType !== 'student') {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  if (!req.user.studentId) {
+    return next(new ApiError(403, 'Student account is not linked.'));
+  }
+  next();
+};
+
+/** Coach user panel only */
+export const requireCoach = (req, res, next) => {
+  if (!req.user) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  if (!req.user.isCoach && req.user.role !== 'coach' && req.user.accountType !== 'coach') {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  if (!req.user.coachId) {
+    return next(new ApiError(403, 'Coach account is not linked.'));
+  }
+  next();
+};
+
+/** Require one of the listed role slugs (or legacy role enum) */
+export const requireRole = (...roles) => (req, res, next) => {
+  if (!req.user) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  const slug = req.user.roleSlug;
+  const role = req.user.role;
+  const ok = roles.some((r) => r === slug || r === role || (r === 'admin' && (req.user.isSuperAdmin || role === 'admin')));
+  if (!ok) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
   }
   next();
 };
