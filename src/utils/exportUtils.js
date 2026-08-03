@@ -122,6 +122,9 @@ export async function toAttendanceReportXlsx({ dailyRows, summaryRows, title = '
     { key: 'status', label: 'Status', width: 10 },
     { key: 'checkIn', label: 'Check-in', width: 12 },
     { key: 'checkOut', label: 'Check-out', width: 12 },
+    { key: 'sourceLabel', label: 'Source', width: 12 },
+    { key: 'distanceLabel', label: 'Distance', width: 12 },
+    { key: 'locationLabel', label: 'Location', width: 12 },
   ];
 
   const daily = workbook.addWorksheet('Daily Attendance');

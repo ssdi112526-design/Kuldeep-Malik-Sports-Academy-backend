@@ -10,8 +10,6 @@ import {
   getCoachAttendanceSummaryList,
   getCoachHistory,
   exportCoachAttendanceExcel,
-  markCoachPresent,
-  listActiveCoachesForMarking,
   scanCoachAttendance,
 } from '../controllers/coachAttendanceController.js';
 
@@ -27,12 +25,10 @@ router.get('/admin/coach-attendance/months', ...adminView, listCoachAttendanceMo
 router.get('/admin/coach-attendance/records', ...adminView, listCoachAttendanceRecords);
 router.get('/admin/coach-attendance/summary/coaches', ...adminView, getCoachAttendanceSummaryList);
 router.get('/admin/coach-attendance/coaches/:coachId/history', ...adminView, getCoachHistory);
-router.get('/admin/coach-attendance/coaches', ...adminView, listActiveCoachesForMarking);
 router.get('/admin/coach-attendance/qr/active', ...adminView, getActiveCoachAttendanceQr);
 router.post('/admin/coach-attendance/qr/generate', ...adminCreate, generateCoachAttendanceQr);
 router.post('/admin/coach-attendance/qr/close', ...adminEdit, closeCoachAttendanceQr);
 router.post('/admin/coach-attendance/qr/:id/close', ...adminEdit, closeCoachAttendanceQr);
-router.post('/admin/coach-attendance/mark', ...adminCreate, markCoachPresent);
 router.post('/admin/coach-attendance/export', ...adminExport, exportCoachAttendanceExcel);
 
 // Coach portal self-scan (JWT coach identity only)

@@ -15,6 +15,8 @@ import scheduleAchievementRoutes from './routes/scheduleAchievementRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 import coachAttendanceRoutes from './routes/coachAttendanceRoutes.js';
 import coachPortalRoutes from './routes/coachPortalRoutes.js';
+import biometricRoutes from './routes/biometricRoutes.js';
+import attendanceSettingsRoutes from './routes/attendanceSettingsRoutes.js';
 import indexRoutes from './routes/index.js';
 import errorHandler, { notFound } from './middleware/errorHandler.js';
 import { UPLOADS_DIR } from './middleware/upload.js';
@@ -82,6 +84,8 @@ app.use('/api', scheduleAchievementRoutes);
 app.use('/api', attendanceRoutes);
 app.use('/api', coachAttendanceRoutes);
 app.use('/api', coachPortalRoutes);
+app.use('/api', biometricRoutes);
+app.use('/api', attendanceSettingsRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

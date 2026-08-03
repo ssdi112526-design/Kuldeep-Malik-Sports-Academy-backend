@@ -219,6 +219,24 @@ export async function calculateTodayCoachStats({ date, now = new Date() } = {}) 
   });
   const present = presentRows.length;
   const absent = Math.max(0, totalCoaches - present);
+
+  const methodRows = await prisma.coachAttendance.findMany({
+    where: { date: day, status: 'present', coach: { status: 'Active' } },
+    select: { coachId: true, method: true },
+  });
+  const seen = new Set();
+  let qrAttendance = 0;
+  let biometricAttendance = 0;
+  let manualAttendance = 0;
+  for (const r of methodRows) {
+    if (seen.has(r.coachId)) continue;
+    seen.add(r.coachId);
+    const m = String(r.method || 'QR').toUpperCase();
+    if (m === 'BIOMETRIC') biometricAttendance += 1;
+    else if (m === 'MANUAL') manualAttendance += 1;
+    else qrAttendance += 1;
+  }
+
   return {
     date: dateKey(day),
     totalCoaches,
@@ -227,6 +245,9 @@ export async function calculateTodayCoachStats({ date, now = new Date() } = {}) 
     absent,
     attendanceRate: pct2(present, totalCoaches),
     attendancePercentage: pct2(present, totalCoaches),
+    qrAttendance,
+    biometricAttendance,
+    manualAttendance,
   };
 }
 
@@ -258,6 +279,11 @@ async function loadCoachCheckInMap({ from, to, coachIds } = {}) {
       coachId: true,
       date: true,
       markedAt: true,
+      method: true,
+      source: true,
+      distanceFromAkhada: true,
+      locationVerified: true,
+      gpsAccuracy: true,
       session: { select: { sessionCode: true } },
     },
     orderBy: { markedAt: 'asc' },
@@ -266,10 +292,17 @@ async function loadCoachCheckInMap({ from, to, coachIds } = {}) {
   for (const r of rows) {
     const key = `${r.coachId}|${dateKey(r.date)}`;
     if (!map.has(key)) {
+      const method = String(r.method || 'QR').toUpperCase();
       map.set(key, {
         markedAt: r.markedAt,
         checkIn: formatIstTime(r.markedAt),
         sessionCode: r.session?.sessionCode || '',
+        method,
+        source: r.source || 'live',
+        sourceLabel: method === 'BIOMETRIC' ? 'Biometric' : method === 'MANUAL' ? 'Manual' : 'QR',
+        distanceFromAkhada: r.distanceFromAkhada,
+        locationVerified: r.locationVerified,
+        gpsAccuracy: r.gpsAccuracy,
       });
     }
   }
@@ -283,6 +316,8 @@ export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() 
   const trainingDayKeys = await getTrainingDayKeys();
   const search = input.search || input.coach || '';
   const statusFilter = String(input.status || 'all').toLowerCase();
+  const methodFilter = String(input.method || input.sourceMethod || 'all').toUpperCase();
+  const locationFilter = String(input.location || input.locationVerified || 'all').toLowerCase();
   const coaches = await loadApplicableCoaches({ from, to, search });
   const dates = listTrainingDates(from, to, trainingDayKeys);
   const checkInMap = await loadCoachCheckInMap({
@@ -301,6 +336,15 @@ export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() 
       const status = hit ? 'Present' : 'Absent';
       if (statusFilter === 'present' && status !== 'Present') continue;
       if (statusFilter === 'absent' && status !== 'Absent') continue;
+      if (methodFilter && methodFilter !== 'ALL') {
+        if (!hit || String(hit.method || 'QR').toUpperCase() !== methodFilter) continue;
+      }
+      if (locationFilter === 'verified') {
+        if (!hit || hit.locationVerified !== true) continue;
+      }
+      if (locationFilter === 'not_verified' || locationFilter === 'unverified') {
+        if (!hit || hit.locationVerified === true) continue;
+      }
       rows.push({
         coachId: coach.id,
         studentId: coach.id,
@@ -319,6 +363,24 @@ export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() 
         checkOut: 0,
         markedAt: hit?.markedAt || null,
         sessionCode: hit?.sessionCode || '',
+        method: hit?.method || null,
+        source: hit?.source || null,
+        sourceLabel: hit ? hit.sourceLabel : '—',
+        distanceFromAkhada: hit?.distanceFromAkhada ?? null,
+        locationVerified: hit?.locationVerified ?? null,
+        gpsAccuracy: hit?.gpsAccuracy ?? null,
+        locationLabel:
+          status !== 'Present'
+            ? '—'
+            : hit?.locationVerified === true
+              ? 'Verified'
+              : hit?.locationVerified === false
+                ? 'Not Verified'
+                : '—',
+        distanceLabel:
+          status !== 'Present' || hit?.distanceFromAkhada == null
+            ? '—'
+            : `${Math.round(hit.distanceFromAkhada)}m`,
       });
     }
   }

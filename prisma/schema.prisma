@@ -533,6 +533,9 @@ model Student {
   // QR
   qrCodePath String? @map("qr_code_path") @db.VarChar(400)
 
+  // Biometric mapping (device user id) — uniqueness across student+coach enforced in app
+  biometricUserId String? @unique @map("biometric_user_id") @db.VarChar(80)
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -546,6 +549,7 @@ model Student {
   @@index([batch])
   @@index([membershipType])
   @@index([joiningDate])
+  @@index([biometricUserId])
   @@map("students")
 }
 
@@ -600,6 +604,9 @@ model Coach {
   // QR
   qrCodePath String? @map("qr_code_path") @db.VarChar(400)
 
+  // Biometric mapping
+  biometricUserId String? @unique @map("biometric_user_id") @db.VarChar(80)
+
   documents CoachDocument?
   students Student[]
   attendanceRecords CoachAttendance[]
@@ -610,6 +617,7 @@ model Coach {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([status])
+  @@index([biometricUserId])
   @@map("coaches")
 }
 
@@ -671,17 +679,29 @@ model AttendanceSession {
 }
 
 model Attendance {
-  id                  String            @id @default(uuid())
-  studentId           String            @map("student_id")
-  student             Student           @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  attendanceSessionId String            @map("attendance_session_id")
-  session             AttendanceSession @relation(fields: [attendanceSessionId], references: [id], onDelete: Restrict)
-  registrationId      String            @map("registration_id") @db.VarChar(50)
-  date                DateTime          @db.Date
-  markedAt            DateTime          @default(now()) @map("marked_at")
-  status              AttendanceStatus  @default(present)
-  source              String            @default("live") @db.VarChar(20)
-  createdAt           DateTime          @default(now()) @map("created_at")
+  id                  String             @id @default(uuid())
+  studentId           String             @map("student_id")
+  student             Student            @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  attendanceSessionId String?            @map("attendance_session_id")
+  session             AttendanceSession? @relation(fields: [attendanceSessionId], references: [id], onDelete: SetNull)
+  registrationId      String             @map("registration_id") @db.VarChar(50)
+  date                DateTime           @db.Date
+  markedAt            DateTime           @default(now()) @map("marked_at")
+  status              AttendanceStatus   @default(present)
+  /// Data plane: live | demo
+  source              String             @default("live") @db.VarChar(20)
+  /// Marking method shown in UI as Source: QR | MANUAL | BIOMETRIC
+  method              String             @default("QR") @db.VarChar(20)
+  deviceId            String?            @map("device_id")
+  device              BiometricDevice?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  biometricUserId     String?            @map("biometric_user_id") @db.VarChar(80)
+  /// GPS geofence fields (QR/mobile attendance)
+  latitude            Float?
+  longitude           Float?
+  gpsAccuracy         Float?             @map("gps_accuracy")
+  distanceFromAkhada  Float?             @map("distance_from_akhada")
+  locationVerified    Boolean?           @map("location_verified")
+  createdAt           DateTime           @default(now()) @map("created_at")
 
   @@unique([studentId, attendanceSessionId])
   @@unique([studentId, date])
@@ -692,6 +712,9 @@ model Attendance {
   @@index([studentId, date])
   @@index([attendanceSessionId])
   @@index([source])
+  @@index([method])
+  @@index([deviceId])
+  @@index([locationVerified])
   @@map("attendance")
 }
 
@@ -726,17 +749,26 @@ model CoachAttendanceSession {
 }
 
 model CoachAttendance {
-  id                  String                 @id @default(uuid())
-  coachId             String                 @map("coach_id")
-  coach               Coach                  @relation(fields: [coachId], references: [id], onDelete: Restrict)
-  attendanceSessionId String                 @map("attendance_session_id")
-  session             CoachAttendanceSession @relation(fields: [attendanceSessionId], references: [id], onDelete: Restrict)
-  coachCode           String                 @map("coach_code") @db.VarChar(50)
-  date                DateTime               @db.Date
-  markedAt            DateTime               @default(now()) @map("marked_at")
-  status              AttendanceStatus       @default(present)
-  source              String                 @default("live") @db.VarChar(20)
-  createdAt           DateTime               @default(now()) @map("created_at")
+  id                  String                  @id @default(uuid())
+  coachId             String                  @map("coach_id")
+  coach               Coach                   @relation(fields: [coachId], references: [id], onDelete: Restrict)
+  attendanceSessionId String?                 @map("attendance_session_id")
+  session             CoachAttendanceSession? @relation(fields: [attendanceSessionId], references: [id], onDelete: SetNull)
+  coachCode           String                  @map("coach_code") @db.VarChar(50)
+  date                DateTime                @db.Date
+  markedAt            DateTime                @default(now()) @map("marked_at")
+  status              AttendanceStatus        @default(present)
+  source              String                  @default("live") @db.VarChar(20)
+  method              String                  @default("QR") @db.VarChar(20)
+  deviceId            String?                 @map("device_id")
+  device              BiometricDevice?        @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  biometricUserId     String?                 @map("biometric_user_id") @db.VarChar(80)
+  latitude            Float?
+  longitude           Float?
+  gpsAccuracy         Float?                  @map("gps_accuracy")
+  distanceFromAkhada  Float?                  @map("distance_from_akhada")
+  locationVerified    Boolean?                @map("location_verified")
+  createdAt           DateTime                @default(now()) @map("created_at")
 
   @@unique([coachId, attendanceSessionId])
   @@unique([coachId, date])
@@ -747,6 +779,88 @@ model CoachAttendance {
   @@index([coachId, date])
   @@index([attendanceSessionId])
   @@index([source])
+  @@index([method])
+  @@index([deviceId])
+  @@index([locationVerified])
   @@map("coach_attendance")
+}
+
+// ---------------------------
+// Biometric devices (adapter-based; no vendor SDK assumed)
+// ---------------------------
+
+enum BiometricDeviceStatus {
+  online
+  offline
+  syncing
+  error
+  disabled
+}
+
+model BiometricDevice {
+  id           String                @id @default(uuid())
+  name         String                @db.VarChar(120)
+  deviceType   String                @default("fingerprint") @map("device_type") @db.VarChar(40)
+  ipAddress    String?               @map("ip_address") @db.VarChar(80)
+  port         Int                   @default(4370)
+  location     String?               @db.VarChar(160)
+  serialNumber String?               @unique @map("serial_number") @db.VarChar(120)
+  /// Shared secret for device → API auth (stored hashed)
+  apiSecretHash String               @map("api_secret_hash") @db.VarChar(128)
+  /// Adapter key for future device drivers (generic_http, zkteco, etc.)
+  adapterKey   String                @default("generic_http") @map("adapter_key") @db.VarChar(40)
+  status       BiometricDeviceStatus @default(offline)
+  isEnabled    Boolean               @default(true) @map("is_enabled")
+  lastSyncAt   DateTime?             @map("last_sync_at")
+  lastError    String?               @map("last_error") @db.VarChar(500)
+  createdAt    DateTime              @default(now()) @map("created_at")
+  updatedAt    DateTime              @updatedAt @map("updated_at")
+
+  logs               BiometricDeviceLog[]
+  studentAttendance  Attendance[]
+  coachAttendance    CoachAttendance[]
+
+  @@index([status])
+  @@index([isEnabled])
+  @@map("biometric_devices")
+}
+
+model BiometricDeviceLog {
+  id              String          @id @default(uuid())
+  deviceId        String          @map("device_id")
+  device          BiometricDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// External log id from device (dedupe)
+  deviceLogId     String?         @map("device_log_id") @db.VarChar(120)
+  biometricUserId String          @map("biometric_user_id") @db.VarChar(80)
+  eventAt         DateTime        @map("event_at")
+  rawPayload      Json?           @map("raw_payload")
+  /// processed | unknown | duplicate | error
+  status          String          @default("processed") @db.VarChar(20)
+  message         String?         @db.VarChar(400)
+  personType      String?         @map("person_type") @db.VarChar(20)
+  personId        String?         @map("person_id")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@unique([deviceId, deviceLogId])
+  @@index([deviceId, eventAt])
+  @@index([biometricUserId])
+  @@index([status])
+  @@map("biometric_device_logs")
+}
+
+/// Singleton geofence config for QR attendance (do not hardcode Akhada coords in code).
+model AttendanceLocationSetting {
+  id                   String   @id @default("default")
+  name                 String   @default("Raghunandan Akhada") @db.VarChar(160)
+  /// Null until admin sets verified coordinates (Use Current Location / Save)
+  latitude             Float?
+  longitude            Float?
+  allowedRadiusMeters  Int      @default(500) @map("allowed_radius_meters")
+  maxGpsAccuracyMeters Int      @default(100) @map("max_gps_accuracy_meters")
+  isEnabled            Boolean  @default(true) @map("is_enabled")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("attendance_location_settings")
 }
 

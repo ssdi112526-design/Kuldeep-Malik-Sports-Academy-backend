@@ -18,6 +18,7 @@ import {
   paginateRows,
 } from '../services/coachAttendanceCalc.js';
 import { resolvePeriodFilter } from '../services/attendanceCalc.js';
+import { assertQrGeofence } from '../services/geofenceService.js';
 
 const QR_TTL_SECONDS = Math.min(
   3600,
@@ -355,6 +356,13 @@ export const listCoachAttendanceRecords = asyncHandler(async (req, res) => {
         checkIn: r.checkIn,
         checkOut: r.checkOut,
         sessionCode: r.sessionCode || null,
+        method: r.method || null,
+        source: r.source || null,
+        sourceLabel: r.sourceLabel || '—',
+        distanceFromAkhada: r.distanceFromAkhada ?? null,
+        locationVerified: r.locationVerified ?? null,
+        distanceLabel: r.distanceLabel || '—',
+        locationLabel: r.locationLabel || '—',
         student: {
           id: r.coachId,
           fullName: r.coachName,
@@ -464,6 +472,9 @@ export const exportCoachAttendanceExcel = asyncHandler(async (req, res) => {
     status: r.status,
     checkIn: r.checkIn,
     checkOut: r.checkOut,
+    sourceLabel: r.sourceLabel || (r.status === 'Present' ? 'QR' : '—'),
+    distanceLabel: r.distanceLabel || '—',
+    locationLabel: r.locationLabel || '—',
   }));
   const summaryRows = matrix.coaches
     .map((r) => ({
@@ -490,180 +501,6 @@ export const exportCoachAttendanceExcel = asyncHandler(async (req, res) => {
     `attachment; filename="raghunandan_akhada_coach_attendance_${stamp}.xlsx"`
   );
   return res.send(buffer);
-});
-
-/**
- * Admin marks a coach present against the active coach QR (or creates session claim).
- * Body: { coachId, sessionId?, token? }
- * Rejects student QR payloads.
- */
-export const markCoachPresent = asyncHandler(async (req, res) => {
-  const coachId = req.body?.coachId;
-  if (!coachId) throw new ApiError(400, 'coachId is required');
-
-  const coach = await prisma.coach.findUnique({ where: { id: coachId } });
-  if (!coach) throw new ApiError(404, 'Coach not found');
-  if (coach.status !== 'Active') throw new ApiError(403, 'Coach is not active');
-
-  // Reject accidental student QR payloads
-  if (req.body?.payload?.type === 'akhada_attendance' || req.body?.type === 'akhada_attendance') {
-    throw new ApiError(400, 'Student QR cannot be used for coach attendance.', 'WRONG_ATTENDANCE_TYPE');
-  }
-
-  const markedAt = new Date();
-  const date = attendanceDateFromInstant(markedAt);
-
-  const already = await prisma.coachAttendance.findFirst({
-    where: { coachId: coach.id, date },
-    select: { id: true },
-  });
-  if (already) {
-    throw new ApiError(409, 'Attendance for this coach has already been marked today.', 'ATTENDANCE_ALREADY_MARKED');
-  }
-
-  let sessionId = req.body?.sessionId;
-  let token = req.body?.token;
-  if (req.body?.payload) {
-    sessionId = req.body.payload.sessionId || sessionId;
-    token = req.body.payload.token || token;
-    if (req.body.payload.type && req.body.payload.type !== 'akhada_coach_attendance') {
-      throw new ApiError(400, 'Invalid Coach Attendance QR.', 'QR_INVALID');
-    }
-  }
-
-  // Ensure we have an active session to attach (create if needed for admin quick-mark)
-  let session =
-    sessionId
-      ? await prisma.coachAttendanceSession.findUnique({ where: { id: sessionId } })
-      : await prisma.coachAttendanceSession.findFirst({
-          where: { status: 'ACTIVE' },
-          orderBy: { createdAt: 'desc' },
-        });
-
-  if (!session || session.status !== 'ACTIVE') {
-    const created = await prisma.$transaction(
-      (tx) => createActiveCoachSession(tx, { createdById: req.user.id }),
-      { maxWait: 10000, timeout: 20000 }
-    );
-    session = created.session;
-    token = created.rawToken;
-    sessionId = session.id;
-  }
-
-  if (token && session.tokenHash !== hashToken(token) && session.displayToken !== token) {
-    // Admin quick-mark may not send token — allow if session is ACTIVE and requester is admin
-    if (req.body?.sessionId) {
-      throw new ApiError(400, 'Invalid Coach Attendance QR.', 'QR_INVALID');
-    }
-  }
-
-  if (session.expiresAt < new Date() && session.status === 'ACTIVE') {
-    await prisma.coachAttendanceSession.update({
-      where: { id: session.id },
-      data: { status: 'EXPIRED', closedAt: new Date(), displayToken: null },
-    });
-    throw new ApiError(400, 'This coach attendance QR has expired.', 'QR_EXPIRED');
-  }
-
-  const record = await prisma.$transaction(
-    async (tx) => {
-      const alreadyTx = await tx.coachAttendance.findFirst({
-        where: { coachId: coach.id, date },
-        select: { id: true },
-      });
-      if (alreadyTx) {
-        throw new ApiError(409, 'Attendance for this coach has already been marked today.', 'ATTENDANCE_ALREADY_MARKED');
-      }
-
-      const claimed = await tx.coachAttendanceSession.updateMany({
-        where: {
-          id: session.id,
-          status: 'ACTIVE',
-          tokenHash: session.tokenHash,
-          expiresAt: { gt: new Date() },
-        },
-        data: {
-          status: 'USED',
-          usedAt: markedAt,
-          usedByCoachId: coach.id,
-          displayToken: null,
-        },
-      });
-      if (claimed.count !== 1) {
-        throw new ApiError(409, 'This QR code has already been used.', 'QR_ALREADY_USED');
-      }
-
-      try {
-        return await tx.coachAttendance.create({
-          data: {
-            coachId: coach.id,
-            attendanceSessionId: session.id,
-            coachCode: coach.coachCode,
-            date,
-            markedAt,
-            status: 'present',
-            source: 'live',
-          },
-        });
-      } catch (err) {
-        if (err?.code === 'P2002') {
-          throw new ApiError(409, 'Attendance for this coach has already been marked today.', 'ATTENDANCE_ALREADY_MARKED');
-        }
-        throw err;
-      }
-    },
-    { maxWait: 10000, timeout: 20000 }
-  );
-
-  // Rotate next QR for desk
-  let nextSession = null;
-  let nextToken = null;
-  try {
-    const created = await prisma.$transaction(
-      (tx) => createActiveCoachSession(tx, { createdById: req.user.id }),
-      { maxWait: 10000, timeout: 20000 }
-    );
-    nextSession = created.session;
-    nextToken = created.rawToken;
-  } catch {
-    /* ignore */
-  }
-
-  const nextAssets =
-    nextSession && nextToken ? await buildQrAssets(nextSession, nextToken) : { qrPayload: null, qrDataUrl: null };
-
-  await writeAuditLog({
-    userId: req.user.id,
-    action: 'coach_attendance_mark',
-    entity: 'coach_attendance',
-    entityId: record.id,
-    details: { coachCode: coach.coachCode, sessionCode: session.sessionCode },
-    req,
-  });
-
-  res.status(201).json({
-    success: true,
-    message: 'Coach attendance marked successfully',
-    data: {
-      attendance: {
-        id: record.id,
-        coachName: coach.fullName,
-        coachCode: coach.coachCode,
-        date: dateKey(date),
-        status: 'Present',
-      },
-      nextSession: nextSession ? publicSession(nextSession, nextAssets) : null,
-    },
-  });
-});
-
-export const listActiveCoachesForMarking = asyncHandler(async (_req, res) => {
-  const coaches = await prisma.coach.findMany({
-    where: { status: 'Active' },
-    orderBy: { fullName: 'asc' },
-    select: { id: true, fullName: true, coachCode: true, mobile: true, photo: true },
-  });
-  res.json({ success: true, data: { coaches } });
 });
 
 /**
@@ -710,6 +547,13 @@ export const scanCoachAttendance = asyncHandler(async (req, res) => {
       'QR_INVALID'
     );
   }
+
+  const geo = await assertQrGeofence({
+    latitude: req.body?.latitude ?? payload?.latitude,
+    longitude: req.body?.longitude ?? payload?.longitude,
+    accuracy: req.body?.accuracy ?? req.body?.gpsAccuracy ?? payload?.accuracy,
+    timestamp: req.body?.timestamp ?? payload?.timestamp,
+  });
 
   const tokenHash = hashToken(token);
   const markedAt = new Date();
@@ -816,6 +660,12 @@ export const scanCoachAttendance = asyncHandler(async (req, res) => {
               markedAt,
               status: 'present',
               source: 'live',
+              method: 'QR',
+              latitude: geo.latitude,
+              longitude: geo.longitude,
+              gpsAccuracy: geo.gpsAccuracy,
+              distanceFromAkhada: geo.distanceFromAkhada,
+              locationVerified: geo.locationVerified,
             },
           });
         } catch (err) {
@@ -866,6 +716,8 @@ export const scanCoachAttendance = asyncHandler(async (req, res) => {
       attendance: {
         id: record.id,
         coachName: coach.fullName,
+        name: coach.fullName,
+        type: 'Coach',
         coachCode: coach.coachCode,
         date: dateKey(date),
         time: new Intl.DateTimeFormat('en-IN', {
@@ -875,7 +727,15 @@ export const scanCoachAttendance = asyncHandler(async (req, res) => {
           timeZone: 'Asia/Kolkata',
         }).format(markedAt),
         status: 'Present',
+        method: 'QR',
+        source: 'QR',
+        sourceLabel: 'QR',
         sessionCode: usedSessionCode,
+        distanceFromAkhada: geo.distanceFromAkhada,
+        distanceMeters: geo.distanceFromAkhada,
+        gpsAccuracy: geo.gpsAccuracy,
+        locationVerified: geo.locationVerified === true,
+        allowedRadiusMeters: geo.settings?.allowedRadiusMeters ?? null,
       },
       nextSession: nextSession ? publicSession(nextSession, nextAssets) : null,
     },

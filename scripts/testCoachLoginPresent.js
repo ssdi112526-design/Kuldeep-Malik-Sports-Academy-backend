@@ -1,5 +1,5 @@
 /**
- * E2E: create coach → login → admin mark present → coach sees attendance
+ * E2E: create coach → login → QR scan present → coach sees attendance
  * Usage: node scripts/testCoachLoginPresent.js
  */
 import fs from 'fs';
@@ -102,15 +102,28 @@ async function main() {
   if (!res.ok) throw new Error(`Coach attendance failed: ${JSON.stringify(data)}`);
   console.log('   before:', data.data.summary);
 
-  console.log('5) Admin mark Present...');
-  res = await fetch(`${API}/admin/coach-attendance/mark`, {
+  console.log('5) Admin generate coach QR + coach scan Present...');
+  res = await fetch(`${API}/admin/coach-attendance/qr/generate`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ coachId: coach.id }),
+    body: JSON.stringify({}),
   });
   data = await json(res);
-  if (!res.ok) throw new Error(`Mark present failed: ${JSON.stringify(data)}`);
-  console.log('   marked OK', data.message);
+  if (!res.ok) throw new Error(`Generate coach QR failed: ${JSON.stringify(data)}`);
+  const session = data.data?.session;
+  const payload = session?.qrPayload;
+  if (!payload?.sessionId || !payload?.token) {
+    throw new Error(`QR payload missing: ${JSON.stringify(data)}`);
+  }
+
+  res = await fetch(`${API}/coach/attendance/scan`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${coachToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payload }),
+  });
+  data = await json(res);
+  if (!res.ok) throw new Error(`Coach QR scan failed: ${JSON.stringify(data)}`);
+  console.log('   marked OK via QR', data.message);
 
   console.log('6) Coach attendance (after)...');
   res = await fetch(`${API}/coach/attendance`, { headers: { Authorization: `Bearer ${coachToken}` } });

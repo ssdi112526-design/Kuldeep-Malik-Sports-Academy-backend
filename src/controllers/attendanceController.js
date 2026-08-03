@@ -22,6 +22,7 @@ import {
   getDailyRoster,
   getStudentAttendanceHistory,
 } from '../services/attendanceCalc.js';
+import { assertQrGeofence } from '../services/geofenceService.js';
 
 /** One-time QR lifetime in seconds (default 60). */
 const QR_TTL_SECONDS = Math.min(
@@ -411,6 +412,13 @@ export const listAttendanceRecords = asyncHandler(async (req, res) => {
           checkIn: r.checkIn,
           checkOut: r.checkOut,
           sessionCode: r.sessionCode || null,
+          method: r.method || null,
+          source: r.source || null,
+          sourceLabel: r.sourceLabel || '—',
+          distanceFromAkhada: r.distanceFromAkhada ?? null,
+          locationVerified: r.locationVerified ?? null,
+          distanceLabel: r.distanceLabel || '—',
+          locationLabel: r.locationLabel || '—',
           student: {
             id: r.studentId,
             fullName: r.studentName,
@@ -469,6 +477,13 @@ export const listAttendanceRecords = asyncHandler(async (req, res) => {
           sessionCode: r.session?.sessionCode,
           attendanceSessionId: r.attendanceSessionId,
           source: r.source || r.session?.source || 'live',
+          method: r.method || 'QR',
+          sourceLabel:
+            String(r.method || 'QR').toUpperCase() === 'BIOMETRIC'
+              ? 'Biometric'
+              : String(r.method || 'QR').toUpperCase() === 'MANUAL'
+                ? 'Manual'
+                : 'QR',
           student: r.student ? withId(r.student) : null,
         }))
       ),
@@ -598,6 +613,9 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
       status: r.status,
       checkIn: r.checkIn,
       checkOut: r.checkOut,
+      sourceLabel: r.sourceLabel || (r.status === 'Present' ? 'QR' : '—'),
+      distanceLabel: r.distanceLabel || '—',
+      locationLabel: r.locationLabel || '—',
     }));
     const summaryRows = matrix.students
       .map((r) => ({
@@ -713,6 +731,14 @@ export const scanAttendance = asyncHandler(async (req, res) => {
     );
   }
 
+  // GPS geofence — before consuming QR
+  const geo = await assertQrGeofence({
+    latitude: req.body?.latitude ?? payload?.latitude,
+    longitude: req.body?.longitude ?? payload?.longitude,
+    accuracy: req.body?.accuracy ?? req.body?.gpsAccuracy ?? payload?.accuracy,
+    timestamp: req.body?.timestamp ?? payload?.timestamp,
+  });
+
   const tokenHash = hashToken(token);
   const markedAt = new Date();
   const date = attendanceDateFromInstant(markedAt);
@@ -825,6 +851,12 @@ export const scanAttendance = asyncHandler(async (req, res) => {
               markedAt,
               status: 'present',
               source: 'live',
+              method: 'QR',
+              latitude: geo.latitude,
+              longitude: geo.longitude,
+              gpsAccuracy: geo.gpsAccuracy,
+              distanceFromAkhada: geo.distanceFromAkhada,
+              locationVerified: geo.locationVerified,
             },
           });
           return { record: created };
@@ -902,6 +934,8 @@ export const scanAttendance = asyncHandler(async (req, res) => {
       attendance: {
         id: record.id,
         studentName: student.fullName,
+        name: student.fullName,
+        type: 'Student',
         registrationId: student.registrationNumber,
         date: dateKey(date),
         time: new Intl.DateTimeFormat('en-IN', {
@@ -911,7 +945,15 @@ export const scanAttendance = asyncHandler(async (req, res) => {
           timeZone: 'Asia/Kolkata',
         }).format(markedAt),
         status: 'Present',
+        method: 'QR',
+        source: 'QR',
+        sourceLabel: 'QR',
         sessionCode: usedSessionCode,
+        distanceFromAkhada: geo.distanceFromAkhada,
+        distanceMeters: geo.distanceFromAkhada,
+        gpsAccuracy: geo.gpsAccuracy,
+        locationVerified: geo.locationVerified === true,
+        allowedRadiusMeters: geo.settings?.allowedRadiusMeters ?? null,
       },
       nextSession: nextSession ? publicSession(nextSession, nextAssets) : null,
     },
