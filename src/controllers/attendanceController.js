@@ -23,6 +23,7 @@ import {
   getStudentAttendanceHistory,
 } from '../services/attendanceCalc.js';
 import { assertQrGeofence } from '../services/geofenceService.js';
+import { encodeAttendanceQrContent } from '../utils/attendanceQrUrl.js';
 
 /** One-time QR lifetime in seconds (default 60). */
 const QR_TTL_SECONDS = Math.min(
@@ -155,12 +156,14 @@ async function buildQrAssets(session, rawToken) {
     token: rawToken,
     expiresAt: session.expiresAt.toISOString(),
   };
-  const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
+  // Encode as website URL so phone camera opens the site (not raw JSON).
+  const qrContent = encodeAttendanceQrContent(payload);
+  const qrDataUrl = await QRCode.toDataURL(qrContent, {
     errorCorrectionLevel: 'M',
     margin: 2,
     width: 512,
   });
-  return { qrPayload: payload, qrDataUrl };
+  return { qrPayload: payload, qrDataUrl, qrUrl: qrContent };
 }
 
 async function createActiveSession(tx, { createdById, ttlSeconds = QR_TTL_SECONDS }) {

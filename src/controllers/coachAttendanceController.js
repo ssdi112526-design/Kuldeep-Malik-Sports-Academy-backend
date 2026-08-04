@@ -19,6 +19,7 @@ import {
 } from '../services/coachAttendanceCalc.js';
 import { resolvePeriodFilter } from '../services/attendanceCalc.js';
 import { assertQrGeofence } from '../services/geofenceService.js';
+import { encodeAttendanceQrContent } from '../utils/attendanceQrUrl.js';
 
 const QR_TTL_SECONDS = Math.min(
   3600,
@@ -106,12 +107,14 @@ async function buildQrAssets(session, rawToken) {
     token: rawToken,
     expiresAt: session.expiresAt.toISOString(),
   };
-  const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
+  // Encode as website URL so phone camera opens the site (not raw JSON).
+  const qrContent = encodeAttendanceQrContent(payload);
+  const qrDataUrl = await QRCode.toDataURL(qrContent, {
     errorCorrectionLevel: 'M',
     margin: 2,
     width: 512,
   });
-  return { qrPayload: payload, qrDataUrl };
+  return { qrPayload: payload, qrDataUrl, qrUrl: qrContent };
 }
 
 async function createActiveCoachSession(tx, { createdById, ttlSeconds = QR_TTL_SECONDS }) {

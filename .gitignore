@@ -21,6 +21,10 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Uploads
+# Uploads (ephemeral on Render — restored from seed-media on boot)
 uploads/*
 !uploads/.gitkeep
+
+# Media snapshot committed so Render redeploys can restore files
+!seed-media/
+!seed-media/**/*
