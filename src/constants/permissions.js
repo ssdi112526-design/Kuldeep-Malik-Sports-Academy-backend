@@ -40,6 +40,7 @@ export const MENU_DEFINITIONS = [
   { menu: 'equipment', label: 'Equipment & Tools', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload'] },
   { menu: 'schedule', label: 'Schedule', actions: ['view', 'create', 'edit', 'delete'] },
   { menu: 'attendance', label: 'Attendance', actions: ['view', 'create', 'edit', 'export'] },
+  { menu: 'finance', label: 'Finance', actions: ['view', 'create', 'edit', 'delete', 'export', 'print', 'download'] },
   { menu: 'achievements', label: 'Achievements', actions: ['view', 'create', 'edit', 'delete'] },
   { menu: 'users', label: 'Users', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { menu: 'roles', label: 'Roles', actions: ['view', 'create', 'edit', 'delete', 'manage_settings'] },
@@ -75,14 +76,19 @@ export function getSystemRolePermissionKeys(allKeys) {
   const managerMenus = ['dashboard', 'programs', 'gallery', 'facilities', 'videos', 'students', 'attendance'];
   const manager = allKeys.filter((k) => managerMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const receptionMenus = ['students', 'inquiries', 'dashboard', 'attendance'];
+  const receptionMenus = ['students', 'inquiries', 'dashboard', 'attendance', 'finance'];
   const reception = allKeys.filter((k) => receptionMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const accountantMenus = ['dashboard', 'students'];
+  const accountantMenus = ['dashboard', 'students', 'finance'];
   const accountant = allKeys.filter(
     (k) =>
       accountantMenus.some((m) => k.startsWith(`${m}.`)) &&
-      (k.endsWith('.view') || k.endsWith('.export') || k.endsWith('.print') || k.endsWith('.download'))
+      (k.endsWith('.view') ||
+        k.endsWith('.export') ||
+        k.endsWith('.print') ||
+        k.endsWith('.download') ||
+        k.endsWith('.create') ||
+        k.endsWith('.edit'))
   );
 
   // Staff: view-only — must not include create/edit/delete
@@ -117,7 +123,7 @@ export const SYSTEM_ROLES = [
   { name: 'Coach', slug: 'coach', description: 'Students, schedule, attendance, achievements, videos and gallery.', isSystem: true },
   { name: 'Manager', slug: 'manager', description: 'Programs, content, students and attendance.', isSystem: true },
   { name: 'Reception', slug: 'reception', description: 'Students, inquiries and attendance desk.', isSystem: true },
-  { name: 'Accountant', slug: 'accountant', description: 'Dashboard and student record views.', isSystem: true },
+  { name: 'Accountant', slug: 'accountant', description: 'Finance, fees collection and student fee views.', isSystem: true },
   { name: 'Staff', slug: 'staff', description: 'View-only access across allowed modules.', isSystem: true },
   { name: 'Student', slug: 'student', description: 'Student portal only — profile, QR scan and own attendance.', isSystem: true },
   { name: 'Coach Portal', slug: 'coach_portal', description: 'Coach user panel only — profile, own attendance and account.', isSystem: true },

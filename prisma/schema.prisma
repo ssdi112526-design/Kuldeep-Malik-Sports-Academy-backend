@@ -530,6 +530,12 @@ model Student {
   attendancePresent Int @default(0) @map("attendance_present")
   attendanceAbsent Int @default(0) @map("attendance_absent")
 
+  /// Manual fee defaults (INR) — finance module
+  monthlyFee      Decimal @default(0) @map("monthly_fee") @db.Decimal(12, 2)
+  admissionFee    Decimal @default(0) @map("admission_fee") @db.Decimal(12, 2)
+  defaultDiscount Decimal @default(0) @map("default_discount") @db.Decimal(12, 2)
+  advanceBalance  Decimal @default(0) @map("advance_balance") @db.Decimal(12, 2)
+
   // QR
   qrCodePath String? @map("qr_code_path") @db.VarChar(400)
 
@@ -543,6 +549,8 @@ model Student {
   loginAccount          User?
   attendanceRecords     Attendance[]
   attendanceSessionsUsed AttendanceSession[] @relation("AttendanceSessionUsedBy")
+  feeMonths             StudentFeeMonth[]
+  feePayments           StudentFeePayment[]
 
   @@index([status])
   @@index([coachId])
@@ -612,6 +620,7 @@ model Coach {
   attendanceRecords CoachAttendance[]
   attendanceSessionsUsed CoachAttendanceSession[] @relation("CoachAttendanceSessionUsedBy")
   loginAccount User?
+  coachPayments CoachPayment[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -862,5 +871,134 @@ model AttendanceLocationSetting {
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("attendance_location_settings")
+}
+
+/* ─── Manual Fees & Coach Payments (no online gateway) ─── */
+
+enum FeeMonthStatus {
+  Paid
+  Partial
+  Due
+  Overdue
+}
+
+enum FinancePaymentMode {
+  Cash
+  UPI
+  BankTransfer
+  Other
+}
+
+enum CoachPayStatus {
+  Paid
+  Partial
+  Pending
+}
+
+/// Monthly fee obligation per student (unique student + month + year)
+model StudentFeeMonth {
+  id           String         @id @default(uuid())
+  studentId    String         @map("student_id")
+  month        Int
+  year         Int
+  feeAmount    Decimal        @map("fee_amount") @db.Decimal(12, 2)
+  previousDue  Decimal        @default(0) @map("previous_due") @db.Decimal(12, 2)
+  discount     Decimal        @default(0) @db.Decimal(12, 2)
+  paidAmount   Decimal        @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  remainingDue Decimal        @default(0) @map("remaining_due") @db.Decimal(12, 2)
+  status       FeeMonthStatus @default(Due)
+  dueDate      DateTime?      @map("due_date")
+  notes        String?        @db.VarChar(500)
+  createdById  String?        @map("created_by_id")
+  updatedById  String?        @map("updated_by_id")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  deletedAt    DateTime?      @map("deleted_at")
+
+  student  Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  payments StudentFeePayment[]
+
+  @@unique([studentId, month, year])
+  @@index([status])
+  @@index([year, month])
+  @@index([deletedAt])
+  @@map("student_fee_months")
+}
+
+/// Individual manual fee collection (cash/UPI/bank) with receipt
+model StudentFeePayment {
+  id                   String             @id @default(uuid())
+  feeMonthId           String             @map("fee_month_id")
+  studentId            String             @map("student_id")
+  amount               Decimal            @db.Decimal(12, 2)
+  paymentDate          DateTime           @map("payment_date")
+  paymentMode          FinancePaymentMode @map("payment_mode")
+  transactionReference String?            @map("transaction_reference") @db.VarChar(120)
+  receiptNumber        String             @unique @map("receipt_number") @db.VarChar(40)
+  remarks              String?            @db.VarChar(500)
+  previousDueSnapshot  Decimal            @default(0) @map("previous_due_snapshot") @db.Decimal(12, 2)
+  discountApplied      Decimal            @default(0) @map("discount_applied") @db.Decimal(12, 2)
+  feeAmountSnapshot    Decimal            @default(0) @map("fee_amount_snapshot") @db.Decimal(12, 2)
+  remainingAfter       Decimal            @default(0) @map("remaining_after") @db.Decimal(12, 2)
+  createdById          String?            @map("created_by_id")
+  updatedById          String?            @map("updated_by_id")
+  deletedAt            DateTime?          @map("deleted_at")
+  deletedById          String?            @map("deleted_by_id")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  feeMonth StudentFeeMonth @relation(fields: [feeMonthId], references: [id], onDelete: Cascade)
+  student  Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([paymentDate])
+  @@index([paymentMode])
+  @@index([deletedAt])
+  @@map("student_fee_payments")
+}
+
+/// Monthly coach salary payment record (manual)
+model CoachPayment {
+  id                   String             @id @default(uuid())
+  coachId              String             @map("coach_id")
+  month                Int
+  year                 Int
+  baseSalary           Decimal            @map("base_salary") @db.Decimal(12, 2)
+  bonus                Decimal            @default(0) @db.Decimal(12, 2)
+  deduction            Decimal            @default(0) @db.Decimal(12, 2)
+  netPayable           Decimal            @map("net_payable") @db.Decimal(12, 2)
+  paidAmount           Decimal            @map("paid_amount") @db.Decimal(12, 2)
+  remainingAmount      Decimal            @map("remaining_amount") @db.Decimal(12, 2)
+  paymentDate          DateTime           @map("payment_date")
+  paymentMode          FinancePaymentMode @map("payment_mode")
+  transactionReference String?            @map("transaction_reference") @db.VarChar(120)
+  voucherNumber        String             @unique @map("voucher_number") @db.VarChar(40)
+  status               CoachPayStatus     @default(Pending)
+  remarks              String?            @db.VarChar(500)
+  createdById          String?            @map("created_by_id")
+  updatedById          String?            @map("updated_by_id")
+  deletedAt            DateTime?          @map("deleted_at")
+  deletedById          String?            @map("deleted_by_id")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@unique([coachId, month, year])
+  @@index([status])
+  @@index([year, month])
+  @@index([paymentDate])
+  @@index([deletedAt])
+  @@map("coach_payments")
+}
+
+model FinanceSequence {
+  id        String @id @default(uuid())
+  key       String @db.VarChar(40)
+  year      Int
+  lastValue Int    @default(0) @map("last_value")
+
+  @@unique([key, year])
+  @@map("finance_sequences")
 }
 
