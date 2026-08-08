@@ -93,3 +93,19 @@ export const previewDistance = asyncHandler(async (req, res) => {
     },
   });
 });
+
+/** Public map coordinates for the website Contact / Location section */
+export const getPublicAkhadaLocation = asyncHandler(async (_req, res) => {
+  const settings = await getAttendanceLocationSettings();
+  const configured = settings.latitude != null && settings.longitude != null;
+  res.json({
+    success: true,
+    data: {
+      name: settings.name || 'Raghunandan Akhada',
+      latitude: configured ? Number(settings.latitude) : null,
+      longitude: configured ? Number(settings.longitude) : null,
+      configured,
+      updatedAt: settings.updatedAt,
+    },
+  });
+});
