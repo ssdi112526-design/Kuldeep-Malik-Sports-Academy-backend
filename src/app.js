@@ -32,36 +32,47 @@ app.use(
   })
 );
 
-const allowedOrigins = (
-  process.env.CLIENT_URL ||
-  'http://localhost:5173,https://www.kartikemi.com,https://kartikemi.com'
-)
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://www.kushti.co.in',
+  'https://kushti.co.in',
+  'https://www.fastsearch.in',
+  'https://fastsearch.in',
+];
+
+const allowedOrigins = (process.env.CLIENT_URL || defaultOrigins.join(','))
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return true;
+  try {
+    const { hostname } = new URL(origin);
+    // Production brand domain (with/without www)
+    if (hostname === 'kushti.co.in' || hostname === 'www.kushti.co.in') return true;
+    if (process.env.NODE_ENV !== 'production') {
+      if (
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+        /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-        return callback(null, true);
-      }
-      // Local LAN testing from phone / other devices
-      if (process.env.NODE_ENV !== 'production') {
-        try {
-          const { hostname } = new URL(origin);
-          if (
-            hostname === 'localhost' ||
-            hostname === '127.0.0.1' ||
-            /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-            /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
-          ) {
-            return callback(null, true);
-          }
-        } catch {
-          /* ignore */
-        }
-      }
+      if (isAllowedOrigin(origin)) return callback(null, true);
       return callback(null, false);
     },
     credentials: true,
