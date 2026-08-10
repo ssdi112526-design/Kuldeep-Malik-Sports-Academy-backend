@@ -42,7 +42,7 @@ const CLIPS = [
     ],
   },
   {
-    title: 'Morning Akhada Routine',
+    title: 'Morning Academy Routine',
     subtitle: 'Dawn discipline',
     description:
       'A morning kushti flow — mitti warm-up, drills, and conditioning under golden light.',

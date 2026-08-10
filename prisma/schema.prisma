@@ -860,7 +860,7 @@ model BiometricDeviceLog {
 /// Singleton geofence config for QR attendance (do not hardcode Akhada coords in code).
 model AttendanceLocationSetting {
   id                   String   @id @default("default")
-  name                 String   @default("Raghunandan Akhada") @db.VarChar(160)
+  name                 String   @default("Raghunandan wrestling academy") @db.VarChar(160)
   /// Null until admin sets verified coordinates (Use Current Location / Save)
   latitude             Float?
   longitude            Float?

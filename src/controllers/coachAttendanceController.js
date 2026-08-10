@@ -496,7 +496,7 @@ export const exportCoachAttendanceExcel = asyncHandler(async (req, res) => {
   const buffer = await toAttendanceReportXlsx({
     dailyRows,
     summaryRows,
-    title: `Raghunandan Akhada Coach Attendance — ${stamp}`,
+    title: `Raghunandan wrestling academy Coach Attendance — ${stamp}`,
   });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader(
@@ -595,7 +595,7 @@ export const scanCoachAttendance = asyncHandler(async (req, res) => {
   if (existingSession.status === 'CLOSED') {
     throw new ApiError(
       400,
-      'No active coach attendance QR is available.\nPlease contact the Akhada administrator.',
+      'No active coach attendance QR is available.\nPlease contact the Academy administrator.',
       'QR_CLOSED'
     );
   }

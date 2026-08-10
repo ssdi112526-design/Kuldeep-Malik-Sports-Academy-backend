@@ -637,7 +637,7 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
     const buffer = await toAttendanceReportXlsx({
       dailyRows,
       summaryRows,
-      title: `Raghunandan Akhada Attendance — ${stamp}`,
+      title: `Raghunandan wrestling academy Attendance — ${stamp}`,
     });
     const filename = `raghunandan_akhada_attendance_${stamp.toLowerCase().replace(/\s+/g, '_')}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -701,7 +701,7 @@ export const scanAttendance = asyncHandler(async (req, res) => {
   const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) throw new ApiError(404, 'Student not found');
   if (student.status !== 'Active') {
-    throw new ApiError(403, 'Your student account is not active. Please contact the Akhada administrator.');
+    throw new ApiError(403, 'Your student account is not active. Please contact the Academy administrator.');
   }
 
   let payload = req.body?.payload ?? req.body?.qrData ?? req.body;
@@ -780,7 +780,7 @@ export const scanAttendance = asyncHandler(async (req, res) => {
   if (existingSession.status === 'CLOSED') {
     throw new ApiError(
       400,
-      'No active attendance QR is available.\nPlease contact the Akhada administrator.',
+      'No active attendance QR is available.\nPlease contact the Academy administrator.',
       'QR_CLOSED'
     );
   }

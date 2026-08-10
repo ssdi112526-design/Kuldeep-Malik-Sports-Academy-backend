@@ -236,27 +236,39 @@ const seed = async () => {
     await prisma.fAQ.createMany({ data: faqs });
     await prisma.equipment.createMany({ data: equipment });
 
-    // Seed Akhada CMS content (copy images from client assets when available)
+    // Seed Academy CMS content (copy images from client assets when available)
     const { copySeedImage } = await import('./seedAssets.js');
 
     const programSeeds = [
       {
+        title: 'Beginner Wrestling',
+        description: 'Foundations of stance, grip, and discipline for new pehlwans.',
+        file: 'programs-beginner.png',
+        displayOrder: 1,
+      },
+      {
         title: 'Strength Training',
         description: 'Jori, gada, and functional power built the pehlwani way.',
         file: 'programs-strength-hd.png',
-        displayOrder: 1,
+        displayOrder: 2,
       },
       {
         title: 'Mud Practice',
         description: 'Authentic kushti sessions in the mitti arena.',
         file: 'programs-mud-hd.png',
-        displayOrder: 2,
+        displayOrder: 3,
       },
       {
         title: 'Advanced Wrestling',
         description: 'Competition technique, counters, and match intelligence.',
-        file: 'gallery-action-1.png',
-        displayOrder: 3,
+        file: 'programs-advanced.png',
+        displayOrder: 4,
+      },
+      {
+        title: 'Yoga & Mobility',
+        description: 'Sunrise breathwork, flexibility, and recovery for lasting pehlwani power.',
+        file: 'programs-yoga.png',
+        displayOrder: 5,
       },
     ];
 
@@ -274,12 +286,16 @@ const seed = async () => {
     }
 
     const gallerySeeds = [
-      { title: 'Technique under pressure', category: 'Technique', file: 'gallery-action-2.png', displayOrder: 1 },
-      { title: 'Breath, balance, recovery', category: 'Yoga', file: 'gallery-yoga.png', displayOrder: 2 },
-      { title: 'Competition intensity', category: 'Competition', file: 'gallery-competition.png', displayOrder: 3 },
-      { title: 'Traditional strength', category: 'Strength', file: 'programs-strength.png', displayOrder: 4 },
-      { title: 'Cleanse and rise again', category: 'Recovery', file: 'gallery-recovery.png', displayOrder: 5 },
-      { title: 'Rooted in the earth', category: 'Mitti', file: 'gallery-mitti.png', displayOrder: 6 },
+      { title: 'Competition intensity', category: 'Competition', file: 'gallery-competition.png', displayOrder: 1 },
+      { title: 'Mud practice dawn', category: 'Mitti', file: 'gallery-mitti.png', displayOrder: 2 },
+      { title: 'Sunrise conditioning run', category: 'Conditioning', file: 'gallery-running.png', displayOrder: 3 },
+      { title: 'Rope climb power', category: 'Strength', file: 'gallery-rope.png', displayOrder: 4 },
+      { title: 'Jori club training', category: 'Strength', file: 'gallery-jori.png', displayOrder: 5 },
+      { title: 'Academy team spirit', category: 'Team', file: 'gallery-team.png', displayOrder: 6 },
+      { title: 'Medal ceremony glory', category: 'Achievement', file: 'gallery-medal.png', displayOrder: 7 },
+      { title: 'Yoga & mobility', category: 'Yoga', file: 'gallery-yoga.png', displayOrder: 8 },
+      { title: 'Recovery after practice', category: 'Recovery', file: 'gallery-recovery.png', displayOrder: 9 },
+      { title: 'Advanced technique', category: 'Technique', file: 'gallery-action-1.png', displayOrder: 10 },
     ];
 
     for (const item of gallerySeeds) {
@@ -302,16 +318,46 @@ const seed = async () => {
         displayOrder: 1,
       },
       {
+        name: 'Strength Gym',
+        description: 'Modern racks and free weights alongside pehlwani power work.',
+        file: 'facilities-gym.png',
+        displayOrder: 2,
+      },
+      {
+        name: 'Wrestling Mats',
+        description: 'Clean indoor mats for technique drills and competition prep.',
+        file: 'facilities-mats.png',
+        displayOrder: 3,
+      },
+      {
+        name: 'Changing Rooms',
+        description: 'Hygienic lockers and changing space after every session.',
+        file: 'facilities-locker.png',
+        displayOrder: 4,
+      },
+      {
+        name: 'Outdoor Ground',
+        description: 'Open yard for running, rope work, and dawn conditioning.',
+        file: 'facilities-outdoor.png',
+        displayOrder: 5,
+      },
+      {
         name: 'Nutrition Support',
         description: 'Wholesome pehlwan diets guided with modern clarity.',
         file: 'facilities-nutrition.png',
-        displayOrder: 2,
+        displayOrder: 6,
       },
       {
         name: 'Recovery Area',
         description: 'Cool-down and cleansing rituals after intense sessions.',
         file: 'facilities-recovery.png',
-        displayOrder: 3,
+        displayOrder: 7,
+      },
+      {
+        name: 'Drinking Water',
+        description: 'Clean hydration point ready through long training days.',
+        file: 'facilities-water.png',
+        displayOrder: 8,
       },
     ];
 
@@ -333,7 +379,7 @@ const seed = async () => {
         title: 'Traditional Dab Pach Training',
         subtitle: 'Master the classic throw',
         description:
-          'Experience authentic Dab Pach techniques taught the Akhada way — balance, timing, and decisive finish.',
+          'Experience authentic Dab Pach techniques taught the Academy way — balance, timing, and decisive finish.',
         category: 'Dab Pach Techniques',
         coachName: 'Guru Raghunandan',
         duration: '08:24',
@@ -356,7 +402,7 @@ const seed = async () => {
         thumb: 'gallery-competition.png',
       },
       {
-        title: 'Morning Akhada Routine',
+        title: 'Morning Academy Routine',
         subtitle: 'Dawn discipline',
         description:
           'A complete morning training flow — mitti warm-up, drills, and conditioning under golden light.',

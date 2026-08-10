@@ -78,7 +78,7 @@ export const previewDistance = asyncHandler(async (req, res) => {
   const lat = Number(req.query.latitude ?? req.body?.latitude);
   const lng = Number(req.query.longitude ?? req.body?.longitude);
   if (settings.latitude == null || settings.longitude == null) {
-    throw new ApiError(400, 'Akhada location is not configured.');
+    throw new ApiError(400, 'Academy location is not configured.');
   }
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     throw new ApiError(400, 'Valid latitude and longitude required.');
@@ -101,7 +101,7 @@ export const getPublicAkhadaLocation = asyncHandler(async (_req, res) => {
   res.json({
     success: true,
     data: {
-      name: settings.name || 'Raghunandan Akhada',
+      name: settings.name || 'Raghunandan wrestling academy',
       latitude: configured ? Number(settings.latitude) : null,
       longitude: configured ? Number(settings.longitude) : null,
       configured,

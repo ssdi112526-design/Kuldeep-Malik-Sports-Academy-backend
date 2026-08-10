@@ -1,7 +1,7 @@
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
 
-const BRAND_NAME = 'Raghunandan Akhada';
+const BRAND_NAME = 'Raghunandan wrestling academy';
 
 let resendClient;
 let gmailTransporter;
@@ -114,7 +114,7 @@ async function sendViaGmail({ to, subject, html, replyTo }) {
     subject,
     html,
     headers: {
-      'X-Entity-Ref-ID': `akhada-contact-${Date.now()}`,
+      'X-Entity-Ref-ID': `academy-contact-${Date.now()}`,
     },
   });
   return true;
@@ -186,7 +186,7 @@ async function sendViaResend({ to, subject, html, replyTo }) {
 
 /**
  * Notify admin when a contact form is submitted.
- * Prefers Resend so inbox shows "Raghunandan Akhada" (not Gmail "me").
+ * Prefers Resend so inbox shows "Raghunandan wrestling academy" (not Gmail "me").
  * Falls back to Gmail SMTP.
  */
 export async function sendNewContactNotification(contact, req) {

@@ -1,6 +1,6 @@
 /**
  * GPS geofencing for QR attendance.
- * Akhada coordinates live in AttendanceLocationSetting (admin-configured) — never hardcode guesses.
+ * Academy coordinates live in AttendanceLocationSetting (admin-configured) — never hardcode guesses.
  */
 import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
@@ -29,7 +29,7 @@ export async function getAttendanceLocationSettings() {
     row = await prisma.attendanceLocationSetting.create({
       data: {
         id: SETTINGS_ID,
-        name: 'Raghunandan Akhada',
+        name: 'Raghunandan wrestling academy',
         allowedRadiusMeters: 500,
         maxGpsAccuracyMeters: 100,
         isEnabled: true,
@@ -43,7 +43,7 @@ export async function upsertAttendanceLocationSettings(input = {}) {
   const existing = await getAttendanceLocationSettings();
   const data = {};
 
-  if (input.name !== undefined) data.name = String(input.name || 'Raghunandan Akhada').trim().slice(0, 160);
+  if (input.name !== undefined) data.name = String(input.name || 'Raghunandan wrestling academy').trim().slice(0, 160);
 
   if (input.latitude !== undefined) {
     const lat = input.latitude === null || input.latitude === '' ? null : Number(input.latitude);
@@ -109,7 +109,7 @@ export async function assertQrGeofence({
   if (settings.latitude == null || settings.longitude == null) {
     throw new ApiError(
       503,
-      'Akhada attendance location is not configured yet.\nPlease ask the administrator to set the location in Attendance Settings.',
+      'Academy attendance location is not configured yet.\nPlease ask the administrator to set the location in Attendance Settings.',
       'LOCATION_NOT_CONFIGURED'
     );
   }
@@ -157,7 +157,7 @@ export async function assertQrGeofence({
   if (distance > allowed) {
     const err = new ApiError(
       403,
-      `You are outside the attendance area.\n\nYour distance: ${Math.round(distance)} meters\nAllowed distance: ${allowed} meters\n\nPlease come within the Akhada attendance area and try again.`,
+      `You are outside the attendance area.\n\nYour distance: ${Math.round(distance)} meters\nAllowed distance: ${allowed} meters\n\nPlease come within the Academy attendance area and try again.`,
       'LOCATION_OUTSIDE_RADIUS'
     );
     err.meta = {
@@ -186,7 +186,7 @@ export async function testLocationAgainstGeofence({ latitude, longitude, accurac
     return {
       ok: false,
       code: 'LOCATION_NOT_CONFIGURED',
-      message: 'Save Akhada latitude/longitude first.',
+      message: 'Save Academy latitude/longitude first.',
       settings,
     };
   }
@@ -211,8 +211,8 @@ export async function testLocationAgainstGeofence({ latitude, longitude, accurac
     message: !accuracyOk
       ? `GPS accuracy too low (${Math.round(acc)} m). Max allowed ${settings.maxGpsAccuracyMeters} m.`
       : inside
-        ? `LOCATION VERIFIED — ${Math.round(distance)} m from Akhada (within ${settings.allowedRadiusMeters} m).`
-        : `LOCATION NOT VERIFIED — ${Math.round(distance)} m from Akhada (allowed ${settings.allowedRadiusMeters} m).`,
+        ? `LOCATION VERIFIED — ${Math.round(distance)} m from Academy (within ${settings.allowedRadiusMeters} m).`
+        : `LOCATION NOT VERIFIED — ${Math.round(distance)} m from Academy (allowed ${settings.allowedRadiusMeters} m).`,
     settings,
   };
 }

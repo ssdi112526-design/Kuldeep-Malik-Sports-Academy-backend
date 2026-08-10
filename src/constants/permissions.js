@@ -1,4 +1,4 @@
-/** Canonical permission catalog for Raghunandan Akhada admin RBAC */
+/** Canonical permission catalog for Raghunandan wrestling academy admin RBAC */
 
 export const PERMISSION_ACTIONS = [
   'view',

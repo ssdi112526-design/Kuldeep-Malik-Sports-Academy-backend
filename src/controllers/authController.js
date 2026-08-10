@@ -59,7 +59,7 @@ export const login = asyncHandler(async (req, res) => {
 
   if (user.role === 'student' || user.studentId) {
     if (!user.student || user.student.status !== 'Active') {
-      throw new ApiError(403, 'Your student account is not active. Please contact the Akhada administrator.');
+      throw new ApiError(403, 'Your student account is not active. Please contact the Academy administrator.');
     }
   }
 
