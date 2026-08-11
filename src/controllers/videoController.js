@@ -66,10 +66,6 @@ async function uniqueSlug(base, excludeId = null) {
   }
 }
 
-function hasPlayableSource({ videoFile, youtubeUrl, vimeoUrl }) {
-  return Boolean(videoFile || youtubeUrl || vimeoUrl);
-}
-
 const idParam = [param('id').isUUID().withMessage('Invalid id')];
 const slugParam = [param('slug').trim().notEmpty().withMessage('Slug is required')];
 
@@ -88,8 +84,6 @@ export const videoCreateValidation = [
   body('subtitle').optional({ checkFalsy: true }).trim().isLength({ max: 300 }),
   body('coachName').optional({ checkFalsy: true }).trim().isLength({ max: 120 }),
   body('duration').optional({ checkFalsy: true }).trim().isLength({ max: 20 }),
-  body('youtubeUrl').optional({ checkFalsy: true }).trim().isLength({ max: 500 }),
-  body('vimeoUrl').optional({ checkFalsy: true }).trim().isLength({ max: 500 }),
   body('displayOrder').optional(),
   body('isFeatured').optional(),
   body('status').optional().isIn(['published', 'draft']),
@@ -108,8 +102,6 @@ export const videoUpdateValidation = [
   body('subtitle').optional({ checkFalsy: true }).trim().isLength({ max: 300 }),
   body('coachName').optional({ checkFalsy: true }).trim().isLength({ max: 120 }),
   body('duration').optional({ checkFalsy: true }).trim().isLength({ max: 20 }),
-  body('youtubeUrl').optional({ checkFalsy: true }).trim().isLength({ max: 500 }),
-  body('vimeoUrl').optional({ checkFalsy: true }).trim().isLength({ max: 500 }),
   body('displayOrder').optional(),
   body('isFeatured').optional(),
   body('status').optional().isIn(['published', 'draft']),
@@ -229,29 +221,28 @@ export const getVideoStats = asyncHandler(async (_req, res) => {
 
 export const createVideo = asyncHandler(async (req, res) => {
   const videoUpload = req.file;
-  const youtubeUrl = req.body.youtubeUrl?.trim() || null;
-  const vimeoUrl = req.body.vimeoUrl?.trim() || null;
   const videoFile = videoUpload ? toPublicPath(videoUpload.filename, 'videos') : null;
 
-  if (!hasPlayableSource({ videoFile, youtubeUrl, vimeoUrl })) {
-    if (videoUpload) deleteUploadedFile(videoFile);
-    throw new ApiError(400, 'Upload an MP4/WebM video file (or provide YouTube/Vimeo URL)');
+  // Admin flow is file-upload only (no YouTube/Vimeo URL create)
+  if (!videoFile) {
+    throw new ApiError(400, 'Please upload an MP4 or WebM video file');
   }
 
-  if (!VIDEO_CATEGORIES.includes(req.body.category.trim())) {
-    if (videoUpload) deleteUploadedFile(videoFile);
+  const youtubeUrl = null;
+  const vimeoUrl = null;
+
+  if (!VIDEO_CATEGORIES.includes((req.body.category || '').trim())) {
+    deleteUploadedFile(videoFile);
     throw new ApiError(400, 'Invalid category');
   }
 
   let thumbnail = null;
   let duration = req.body.duration?.trim() || null;
 
-  if (videoUpload) {
-    const abs = path.join(VIDEOS_DIR, videoUpload.filename);
-    thumbnail = await generateVideoThumbnail(abs);
-    if (!duration) {
-      duration = (await getVideoDurationLabel(abs)) || null;
-    }
+  const abs = path.join(VIDEOS_DIR, videoUpload.filename);
+  thumbnail = await generateVideoThumbnail(abs);
+  if (!duration) {
+    duration = (await getVideoDurationLabel(abs)) || null;
   }
 
   const slug = await uniqueSlug(req.body.title);
@@ -277,7 +268,7 @@ export const createVideo = asyncHandler(async (req, res) => {
       isFeatured,
       displayOrder: parseOrder(req.body.displayOrder, 0),
       status: req.body.status === 'published' ? 'published' : 'draft',
-      fileSize: videoUpload?.size || 0,
+      fileSize: videoUpload.size || 0,
     },
   });
 
@@ -312,13 +303,13 @@ export const updateVideo = asyncHandler(async (req, res) => {
     }
   }
 
-  const youtubeUrl =
-    req.body.youtubeUrl !== undefined ? req.body.youtubeUrl.trim() || null : existing.youtubeUrl;
-  const vimeoUrl =
-    req.body.vimeoUrl !== undefined ? req.body.vimeoUrl.trim() || null : existing.vimeoUrl;
+  // Admin is file-upload only — do not accept new YouTube/Vimeo URLs from the form.
+  // Legacy rows may still have URLs; keep them unless a new file replaces the source.
+  const youtubeUrl = videoUpload ? null : existing.youtubeUrl;
+  const vimeoUrl = videoUpload ? null : existing.vimeoUrl;
 
-  if (!hasPlayableSource({ videoFile, youtubeUrl, vimeoUrl })) {
-    throw new ApiError(400, 'Upload an MP4/WebM video file (or provide YouTube/Vimeo URL)');
+  if (!videoFile && !youtubeUrl && !vimeoUrl) {
+    throw new ApiError(400, 'Please upload an MP4 or WebM video file');
   }
 
   if (req.body.category && !VIDEO_CATEGORIES.includes(req.body.category.trim())) {

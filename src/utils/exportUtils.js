@@ -108,7 +108,7 @@ export async function toXlsxBuffer(rows, columns = EXPORT_COLUMNS, options = {})
 /** Multi-sheet attendance workbook (Daily + Summary). */
 export async function toAttendanceReportXlsx({ dailyRows, summaryRows, title = 'Attendance' } = {}) {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Raghunandan wrestling academy';
+  workbook.creator = 'Kuldeep Malik Sports Academy';
   workbook.created = new Date();
 
   const dailyCols = [

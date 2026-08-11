@@ -5,6 +5,7 @@ import {
   uploadSingle,
   uploadMultiple,
   uploadVideoMedia,
+  uploadSiteSettings,
   handleMulterError,
 } from '../middleware/upload.js';
 import { modulePermissionKeys } from '../constants/permissions.js';
@@ -36,6 +37,28 @@ import {
   facilityCreateValidation,
   facilityUpdateValidation,
   facilityIdValidation,
+  listFeaturesPublic,
+  listFeaturesAdmin,
+  createFeature,
+  updateFeature,
+  deleteFeature,
+  featureListValidation,
+  featureCreateValidation,
+  featureUpdateValidation,
+  featureIdValidation,
+  listMembershipPlansPublic,
+  listMembershipPlansAdmin,
+  createMembershipPlan,
+  updateMembershipPlan,
+  deleteMembershipPlan,
+  membershipListValidation,
+  membershipCreateValidation,
+  membershipUpdateValidation,
+  membershipIdValidation,
+  getSiteSettingsPublic,
+  getSiteSettingsAdmin,
+  updateSiteSetting,
+  siteSettingUpdateValidation,
   getContentStats,
 } from '../controllers/cmsController.js';
 import {
@@ -65,13 +88,31 @@ const runUpload = (uploader) => (req, res, next) => {
 const programsRead = [protect, requireAnyPermission(...modulePermissionKeys('programs'))];
 const galleryRead = [protect, requireAnyPermission(...modulePermissionKeys('gallery'))];
 const facilitiesRead = [protect, requireAnyPermission(...modulePermissionKeys('facilities'))];
+const featuresRead = [protect, requireAnyPermission(...modulePermissionKeys('features'))];
+const membershipRead = [protect, requireAnyPermission(...modulePermissionKeys('membership'))];
+const websiteRead = [protect, requireAnyPermission(...modulePermissionKeys('website_content'))];
 const videosRead = [protect, requireAnyPermission(...modulePermissionKeys('videos'))];
-const dashboardRead = [protect, requireAnyPermission(...modulePermissionKeys('dashboard'), ...modulePermissionKeys('programs'), ...modulePermissionKeys('gallery'), ...modulePermissionKeys('facilities'), ...modulePermissionKeys('videos'))];
+const dashboardRead = [
+  protect,
+  requireAnyPermission(
+    ...modulePermissionKeys('dashboard'),
+    ...modulePermissionKeys('programs'),
+    ...modulePermissionKeys('gallery'),
+    ...modulePermissionKeys('facilities'),
+    ...modulePermissionKeys('features'),
+    ...modulePermissionKeys('membership'),
+    ...modulePermissionKeys('website_content'),
+    ...modulePermissionKeys('videos')
+  ),
+];
 
 /* Public */
 router.get('/programs', listProgramsPublic);
 router.get('/gallery', listGalleryPublic);
 router.get('/facilities', listFacilitiesPublic);
+router.get('/features', listFeaturesPublic);
+router.get('/membership-plans', listMembershipPlansPublic);
+router.get('/site-settings', getSiteSettingsPublic);
 router.get('/videos', listVideosPublic);
 router.get('/videos/:slug', ...videoSlugValidation, validate, getVideoBySlug);
 
@@ -164,6 +205,82 @@ router.delete(
   ...facilityIdValidation,
   validate,
   deleteFacility
+);
+
+/* Admin Features */
+router.get('/admin/features', ...featuresRead, ...featureListValidation, validate, listFeaturesAdmin);
+router.post(
+  '/admin/features',
+  protect,
+  requirePermission('features.create'),
+  runUpload(uploadSingle),
+  ...featureCreateValidation,
+  validate,
+  createFeature
+);
+router.put(
+  '/admin/features/:id',
+  protect,
+  requirePermission('features.edit'),
+  runUpload(uploadSingle),
+  ...featureUpdateValidation,
+  validate,
+  updateFeature
+);
+router.delete(
+  '/admin/features/:id',
+  protect,
+  requirePermission('features.delete'),
+  ...featureIdValidation,
+  validate,
+  deleteFeature
+);
+
+/* Admin Membership plans */
+router.get(
+  '/admin/membership-plans',
+  ...membershipRead,
+  ...membershipListValidation,
+  validate,
+  listMembershipPlansAdmin
+);
+router.post(
+  '/admin/membership-plans',
+  protect,
+  requirePermission('membership.create'),
+  runUpload(uploadSingle),
+  ...membershipCreateValidation,
+  validate,
+  createMembershipPlan
+);
+router.put(
+  '/admin/membership-plans/:id',
+  protect,
+  requirePermission('membership.edit'),
+  runUpload(uploadSingle),
+  ...membershipUpdateValidation,
+  validate,
+  updateMembershipPlan
+);
+router.delete(
+  '/admin/membership-plans/:id',
+  protect,
+  requirePermission('membership.delete'),
+  ...membershipIdValidation,
+  validate,
+  deleteMembershipPlan
+);
+
+/* Admin Website content / site settings */
+router.get('/admin/site-settings', ...websiteRead, getSiteSettingsAdmin);
+router.put(
+  '/admin/site-settings',
+  protect,
+  requirePermission('website_content.edit'),
+  runUpload(uploadSiteSettings),
+  ...siteSettingUpdateValidation,
+  validate,
+  updateSiteSetting
 );
 
 /* Admin Videos */

@@ -71,6 +71,17 @@ function parseLimit(value, fallback = 12) {
   return Math.min(n, 100);
 }
 
+function parseBool(value, fallback = undefined) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return value === 'true' || value === '1';
+}
+
+function parseOrder(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
 function parseDateOnly(value) {
   // Accept YYYY-MM-DD
   const s = String(value || '').trim();
@@ -736,6 +747,25 @@ export const exportStudents = asyncHandler(async (req, res) => {
 // COACHES (Phase-1 basic)
 // ---------------------------
 
+export const listCoachesPublic = asyncHandler(async (_req, res) => {
+  const items = await prisma.coach.findMany({
+    where: { status: 'Active', showOnWebsite: true },
+    orderBy: [{ websiteOrder: 'asc' }, { createdAt: 'desc' }],
+    select: {
+      id: true,
+      fullName: true,
+      photo: true,
+      designation: true,
+      specialization: true,
+      experienceYears: true,
+      biography: true,
+      websiteOrder: true,
+    },
+  });
+
+  res.json({ success: true, data: { coaches: withIds(items) } });
+});
+
 export const listCoachesAdmin = asyncHandler(async (req, res) => {
   const page = parsePage(req.query.page, 1);
   const limit = parseLimit(req.query.limit, 12);
@@ -842,10 +872,13 @@ export const createCoach = asyncHandler(async (req, res) => {
     address,
     experienceYears,
     specialization,
+    designation,
     qualification,
     salary,
     joiningDate,
     status,
+    showOnWebsite,
+    websiteOrder,
     aadhaarNumber,
     panNumber,
     achievements,
@@ -911,10 +944,13 @@ export const createCoach = asyncHandler(async (req, res) => {
         address: address || null,
         experienceYears: experienceYears ? Number(experienceYears) : 0,
         specialization: specialization || null,
+        designation: designation ? String(designation).trim() : null,
         qualification: qualification || null,
         salary: salary ? Number(salary) : 0,
         joiningDate: joiningDate ? new Date(joiningDate) : null,
         status: status || 'Active',
+        showOnWebsite: parseBool(showOnWebsite, false),
+        websiteOrder: parseOrder(websiteOrder, 0),
         aadhaarNumber: String(aadhaarNumber).trim(),
         panNumber: String(panNumber).trim(),
         achievements: achievements || null,
@@ -1027,10 +1063,20 @@ export const updateCoach = asyncHandler(async (req, res) => {
         address: req.body.address !== undefined ? req.body.address || null : coach.address,
         experienceYears: req.body.experienceYears !== undefined ? Number(req.body.experienceYears) || 0 : coach.experienceYears,
         specialization: req.body.specialization !== undefined ? req.body.specialization || null : coach.specialization,
+        designation:
+          req.body.designation !== undefined
+            ? req.body.designation
+              ? String(req.body.designation).trim()
+              : null
+            : coach.designation,
         qualification: req.body.qualification !== undefined ? req.body.qualification || null : coach.qualification,
         salary: req.body.salary !== undefined ? Number(req.body.salary) || 0 : coach.salary,
         joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : coach.joiningDate,
         status: req.body.status !== undefined ? req.body.status : coach.status,
+        showOnWebsite:
+          req.body.showOnWebsite !== undefined ? parseBool(req.body.showOnWebsite, false) : coach.showOnWebsite,
+        websiteOrder:
+          req.body.websiteOrder !== undefined ? parseOrder(req.body.websiteOrder, coach.websiteOrder || 0) : coach.websiteOrder,
         aadhaarNumber: nextAadhaarNumber,
         panNumber: nextPanNumber,
         achievements: req.body.achievements !== undefined ? req.body.achievements || null : coach.achievements,

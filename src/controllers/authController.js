@@ -162,6 +162,238 @@ export const changePassword = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Step-up password check for already-authenticated users (e.g. mobile Controller unlock).
+ * Uses the SEPARATE controllerPassword — never the login password.
+ */
+export const verifyPassword = asyncHandler(async (req, res) => {
+  const password = String(req.body.password || req.body.currentPassword || '');
+  if (!password) throw new ApiError(400, 'Controller password is required');
+
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user) throw new ApiError(404, 'User not found');
+  if (!user.isActive) throw new ApiError(403, INACTIVE_ACCOUNT);
+
+  if (!user.controllerPassword) {
+    throw new ApiError(
+      400,
+      'Controller password is not set. Create a Controller password first.',
+      'CONTROLLER_PASSWORD_NOT_SET'
+    );
+  }
+
+  const ok = await bcrypt.compare(password, user.controllerPassword);
+  if (!ok) throw new ApiError(401, 'Incorrect Controller password');
+
+  await writeAuditLog({
+    userId: user.id,
+    action: 'controller_password_verify',
+    entity: 'user',
+    entityId: user.id,
+    details: { purpose: 'controller_unlock' },
+    req,
+  });
+
+  res.json({ success: true, message: 'Controller password verified' });
+});
+
+/** Whether the logged-in user has created a Controller password. */
+export const getControllerPasswordStatus = asyncHandler(async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: { controllerPassword: true },
+  });
+  if (!user) throw new ApiError(404, 'User not found');
+  res.json({
+    success: true,
+    data: { isSet: Boolean(user.controllerPassword) },
+  });
+});
+
+/**
+ * First-time create (or recreate if empty). Requires login password once so only
+ * the account owner can set the separate Controller password.
+ */
+export const setupControllerPassword = asyncHandler(async (req, res) => {
+  const loginPassword = String(req.body.loginPassword || req.body.currentPassword || '');
+  const password = String(req.body.password || req.body.controllerPassword || '');
+  const confirmPassword = String(req.body.confirmPassword || '');
+
+  if (!loginPassword || !password || !confirmPassword) {
+    throw new ApiError(400, 'Login password, Controller password and confirm password are required');
+  }
+  if (password !== confirmPassword) {
+    throw new ApiError(400, 'Controller passwords do not match');
+  }
+  if (!STRONG_PASSWORD.test(password)) {
+    throw new ApiError(400, 'Controller password must be 8+ characters with upper, lower and a number');
+  }
+  if (password === loginPassword) {
+    throw new ApiError(400, 'Controller password must be different from your login password');
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user) throw new ApiError(404, 'User not found');
+  if (!user.isActive) throw new ApiError(403, INACTIVE_ACCOUNT);
+
+  if (!(await bcrypt.compare(loginPassword, user.password))) {
+    throw new ApiError(401, 'Login password is incorrect');
+  }
+
+  if (user.controllerPassword) {
+    throw new ApiError(400, 'Controller password already exists. Use forgot/reset to change it.');
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      controllerPassword: await bcrypt.hash(password, 12),
+      controllerPasswordResetToken: null,
+      controllerPasswordResetExpires: null,
+    },
+  });
+
+  await writeAuditLog({
+    userId: user.id,
+    action: 'controller_password_setup',
+    entity: 'user',
+    entityId: user.id,
+    req,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Controller password created successfully',
+    data: { isSet: true },
+  });
+});
+
+/** Logged-in admin: email a Controller password reset token. */
+export const forgotControllerPassword = asyncHandler(async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    include: { student: true, coach: true },
+  });
+  if (!user) throw new ApiError(404, 'User not found');
+  if (!user.isActive) throw new ApiError(403, INACTIVE_ACCOUNT);
+
+  const generic = {
+    success: true,
+    message:
+      'If an email is on file, Controller password reset instructions have been sent. Check your inbox.',
+  };
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashResetToken(rawToken);
+  const expires = new Date(Date.now() + RESET_TOKEN_HOURS * 60 * 60 * 1000);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      controllerPasswordResetToken: tokenHash,
+      controllerPasswordResetExpires: expires,
+    },
+  });
+
+  const resetUrl = `${clientBaseUrl()}/reset-controller-password?token=${rawToken}`;
+  const emailTarget =
+    user.email && !user.email.endsWith('@student.akhada.local') && !user.email.endsWith('@coach.akhada.local')
+      ? user.email
+      : user.student?.email || user.coach?.email || null;
+
+  let emailed = false;
+  if (emailTarget) {
+    emailed = await sendPasswordResetEmail({
+      to: emailTarget,
+      name: user.name,
+      resetUrl,
+      expiresInHours: RESET_TOKEN_HOURS,
+      purpose: 'controller',
+    });
+  }
+
+  const data = {};
+  // Always return token to the authenticated mobile client so reset works even without email.
+  data.resetToken = rawToken;
+  data.expiresInHours = RESET_TOKEN_HOURS;
+  if (!emailed) {
+    data.devHint = emailTarget
+      ? 'Email could not be sent — use the reset token shown in the app.'
+      : 'No email on file — use the reset token shown in the app.';
+  } else {
+    data.emailedTo = emailTarget.replace(/(.{2}).+(@.+)/, '$1***$2');
+  }
+
+  await writeAuditLog({
+    userId: user.id,
+    action: 'controller_password_forgot',
+    entity: 'user',
+    entityId: user.id,
+    details: { emailed: Boolean(emailed) },
+    req,
+  });
+
+  res.json({ ...generic, data });
+});
+
+/** Reset Controller password with token from forgot flow (does not change login password). */
+export const resetControllerPassword = asyncHandler(async (req, res) => {
+  const { token, password, confirmPassword, newPassword } = req.body;
+  const nextPassword = password || newPassword;
+
+  if (!token) throw new ApiError(400, 'Reset token is required');
+  if (!nextPassword || !confirmPassword) {
+    throw new ApiError(400, 'New Controller password and confirm password are required');
+  }
+  if (nextPassword !== confirmPassword) {
+    throw new ApiError(400, 'Passwords do not match');
+  }
+  if (!STRONG_PASSWORD.test(nextPassword)) {
+    throw new ApiError(400, 'Controller password must be 8+ characters with upper, lower and a number');
+  }
+
+  const tokenHash = hashResetToken(String(token).trim());
+  const user = await prisma.user.findFirst({
+    where: {
+      controllerPasswordResetToken: tokenHash,
+      controllerPasswordResetExpires: { gt: new Date() },
+    },
+  });
+
+  if (!user) {
+    throw new ApiError(400, 'Invalid or expired reset token. Please request a new one.');
+  }
+
+  // Reject if identical to login password
+  if (await bcrypt.compare(nextPassword, user.password)) {
+    throw new ApiError(400, 'Controller password must be different from your login password');
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      controllerPassword: await bcrypt.hash(nextPassword, 12),
+      controllerPasswordResetToken: null,
+      controllerPasswordResetExpires: null,
+    },
+  });
+
+  await writeAuditLog({
+    userId: user.id,
+    action: 'controller_password_reset',
+    entity: 'user',
+    entityId: user.id,
+    details: { via: 'token' },
+    req,
+  });
+
+  res.json({
+    success: true,
+    message: 'Controller password reset successfully.',
+    data: { isSet: true },
+  });
+});
+
+/**
  * Forgot password — accepts username, email, or mobile.
  * Always returns a generic success message (no account enumeration).
  * If email is available, sends reset link.

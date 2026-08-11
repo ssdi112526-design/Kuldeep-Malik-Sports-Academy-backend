@@ -11,6 +11,7 @@ import {
   deleteStudent,
   getStudentStats,
   exportStudents,
+  listCoachesPublic,
   listCoachesAdmin,
   getCoachById,
   createCoach,
@@ -62,6 +63,7 @@ router.delete('/admin/students/:id', protect, requirePermission('students.delete
 // ---------------------------
 // Coaches
 // ---------------------------
+router.get('/coaches', listCoachesPublic);
 router.get('/admin/coaches', ...coachesRead, listCoachesAdmin);
 router.get('/admin/coaches/stats', ...coachesRead, getCoachStats);
 router.post('/admin/coaches/export', protect, requirePermission('coaches.export'), exportCoaches);

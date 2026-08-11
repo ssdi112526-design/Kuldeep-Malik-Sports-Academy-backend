@@ -101,7 +101,7 @@ export const getPublicAkhadaLocation = asyncHandler(async (_req, res) => {
   res.json({
     success: true,
     data: {
-      name: settings.name || 'Raghunandan wrestling academy',
+      name: settings.name || 'Kuldeep Malik Sports Academy',
       latitude: configured ? Number(settings.latitude) : null,
       longitude: configured ? Number(settings.longitude) : null,
       configured,

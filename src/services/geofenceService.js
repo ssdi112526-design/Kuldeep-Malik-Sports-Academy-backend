@@ -29,7 +29,7 @@ export async function getAttendanceLocationSettings() {
     row = await prisma.attendanceLocationSetting.create({
       data: {
         id: SETTINGS_ID,
-        name: 'Raghunandan wrestling academy',
+        name: 'Kuldeep Malik Sports Academy',
         allowedRadiusMeters: 500,
         maxGpsAccuracyMeters: 100,
         isEnabled: true,
@@ -43,7 +43,7 @@ export async function upsertAttendanceLocationSettings(input = {}) {
   const existing = await getAttendanceLocationSettings();
   const data = {};
 
-  if (input.name !== undefined) data.name = String(input.name || 'Raghunandan wrestling academy').trim().slice(0, 160);
+  if (input.name !== undefined) data.name = String(input.name || 'Kuldeep Malik Sports Academy').trim().slice(0, 160);
 
   if (input.latitude !== undefined) {
     const lat = input.latitude === null || input.latitude === '' ? null : Number(input.latitude);

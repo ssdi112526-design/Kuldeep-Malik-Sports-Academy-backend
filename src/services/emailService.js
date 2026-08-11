@@ -1,7 +1,7 @@
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
 
-const BRAND_NAME = 'Raghunandan wrestling academy';
+const BRAND_NAME = 'Kuldeep Malik Sports Academy';
 
 let resendClient;
 let gmailTransporter;
@@ -123,22 +123,39 @@ async function sendViaGmail({ to, subject, html, replyTo }) {
 /**
  * Send password reset link to student/coach/staff.
  * Returns true if emailed successfully.
+ * @param {{ to: string, name?: string, resetUrl: string, expiresInHours?: number, purpose?: 'login'|'controller' }} opts
  */
-export async function sendPasswordResetEmail({ to, name, resetUrl, expiresInHours = 1 }) {
+export async function sendPasswordResetEmail({
+  to,
+  name,
+  resetUrl,
+  expiresInHours = 1,
+  purpose = 'login',
+}) {
   if (!to) return false;
+
+  const isController = purpose === 'controller';
+  const heading = isController ? 'Controller password reset' : 'Password reset';
+  const body = isController
+    ? 'We received a request to reset your Controller password (admin menu unlock). Click the button below to choose a new Controller password. This link expires in'
+    : 'We received a request to reset your password. Click the button below to choose a new password. This link expires in';
+  const button = isController ? 'Reset Controller Password' : 'Reset Password';
+  const subject = isController
+    ? `${BRAND_NAME}: Reset your Controller password`
+    : `${BRAND_NAME}: Reset your password`;
 
   const html = `
   <div style="font-family:Arial,Helvetica,sans-serif;background:#f1f5f9;padding:24px;">
     <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
       <div style="background:linear-gradient(135deg,#2563EB,#1D4ED8);padding:20px 24px;">
         <h1 style="margin:0;color:#ffffff;font-size:18px;">${escapeHtml(BRAND_NAME)}</h1>
-        <p style="margin:4px 0 0;color:#eff6ff;font-size:13px;">Password reset</p>
+        <p style="margin:4px 0 0;color:#eff6ff;font-size:13px;">${escapeHtml(heading)}</p>
       </div>
       <div style="padding:20px 24px;color:#1e293b;font-size:14px;line-height:1.6;">
         <p>Hello ${escapeHtml(name || 'there')},</p>
-        <p>We received a request to reset your password. Click the button below to choose a new password. This link expires in ${expiresInHours} hour(s) and can be used only once.</p>
+        <p>${body} ${expiresInHours} hour(s) and can be used only once.</p>
         <p style="text-align:center;margin:28px 0;">
-          <a href="${escapeHtml(resetUrl)}" style="display:inline-block;background:#2563EB;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">Reset Password</a>
+          <a href="${escapeHtml(resetUrl)}" style="display:inline-block;background:#2563EB;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">${escapeHtml(button)}</a>
         </p>
         <p style="font-size:12px;color:#64748b;word-break:break-all;">Or copy this link:<br/>${escapeHtml(resetUrl)}</p>
         <p style="font-size:12px;color:#64748b;">If you did not request this, you can ignore this email.</p>
@@ -146,7 +163,6 @@ export async function sendPasswordResetEmail({ to, name, resetUrl, expiresInHour
     </div>
   </div>`;
 
-  const subject = `${BRAND_NAME}: Reset your password`;
   let sent = false;
   try {
     sent = await sendViaResend({ to, subject, html });
@@ -186,7 +202,7 @@ async function sendViaResend({ to, subject, html, replyTo }) {
 
 /**
  * Notify admin when a contact form is submitted.
- * Prefers Resend so inbox shows "Raghunandan wrestling academy" (not Gmail "me").
+ * Prefers Resend so inbox shows "Kuldeep Malik Sports Academy" (not Gmail "me").
  * Falls back to Gmail SMTP.
  */
 export async function sendNewContactNotification(contact, req) {

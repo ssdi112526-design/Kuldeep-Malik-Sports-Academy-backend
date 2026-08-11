@@ -73,7 +73,7 @@ export async function seedRbac(existingAdminEmail) {
     });
   }
 
-  // Ensure seeded admin has username + super admin role
+  // Ensure seeded admin has username + super admin role + display name
   if (existingAdminEmail && superRole) {
     const admin = await prisma.user.findUnique({ where: { email: existingAdminEmail.toLowerCase() } });
     if (admin) {
@@ -82,6 +82,9 @@ export async function seedRbac(existingAdminEmail) {
         data: {
           roleId: superRole.id,
           username: admin.username || 'superadmin',
+          name: admin.name === 'Admin' || admin.name === 'Super Admin' || !admin.name
+            ? 'Ashwani Kumar'
+            : admin.name,
         },
       });
     }
@@ -99,7 +102,7 @@ async function main() {
   if (!admin) {
     admin = await prisma.user.create({
       data: {
-        name: 'Super Admin',
+        name: 'Ashwani Kumar',
         email: email.toLowerCase(),
         username: 'superadmin',
         password: await bcrypt.hash(password, 12),
@@ -108,6 +111,11 @@ async function main() {
       },
     });
     console.log('Created admin user:', email);
+  } else if (admin.name === 'Admin' || admin.name === 'Super Admin') {
+    admin = await prisma.user.update({
+      where: { id: admin.id },
+      data: { name: 'Ashwani Kumar' },
+    });
   }
 
   const result = await seedRbac(email);

@@ -34,6 +34,10 @@ model User {
   mobile       String?   @db.VarChar(20)
   profileImage String?   @map("profile_image") @db.VarChar(500)
   password     String
+  /** Separate from login password — unlocks mobile/admin Controller menu */
+  controllerPassword           String?   @map("controller_password")
+  controllerPasswordResetToken String?   @map("controller_password_reset_token") @db.VarChar(128)
+  controllerPasswordResetExpires DateTime? @map("controller_password_reset_expires")
   role         UserRole  @default(user)
   roleId       String?   @map("role_id")
   studentId    String?   @unique @map("student_id")
@@ -328,6 +332,49 @@ model Facility {
   @@map("facilities")
 }
 
+model Feature {
+  id             String   @id @default(uuid())
+  titleEn        String   @map("title_en") @db.VarChar(200)
+  titleHi        String   @map("title_hi") @db.VarChar(200)
+  descriptionEn  String   @map("description_en") @db.VarChar(1000)
+  descriptionHi  String   @map("description_hi") @db.VarChar(1000)
+  icon           String?  @db.VarChar(100)
+  image          String?
+  displayOrder   Int      @default(0) @map("display_order")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([displayOrder, isActive])
+  @@map("features")
+}
+
+model MembershipPlan {
+  id           String   @id @default(uuid())
+  name         String   @db.VarChar(200)
+  description  String   @db.VarChar(2000)
+  priceLabel   String?  @map("price_label") @db.VarChar(120)
+  benefits     String?  @db.VarChar(3000)
+  image        String?
+  displayOrder Int      @default(0) @map("display_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([displayOrder, isActive])
+  @@map("membership_plans")
+}
+
+model SiteSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique @db.VarChar(80)
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("site_settings")
+}
+
 model Achievement {
   id           String   @id @default(uuid())
   labelEn      String   @map("label_en") @db.VarChar(120)
@@ -594,11 +641,14 @@ model Coach {
 
   experienceYears Int? @default(0) @map("experience_years")
   specialization String? // comma-separated or single value
+  designation String? @db.VarChar(150)
   qualification String?
   salary Int? @default(0)
   joiningDate DateTime? @map("joining_date")
 
   status CoachStatus @default(Active)
+  showOnWebsite Boolean @default(false) @map("show_on_website")
+  websiteOrder Int @default(0) @map("website_order")
 
   // Identity numbers (images live in CoachDocument)
   aadhaarNumber String @unique @db.VarChar(12) @map("aadhaar_number")

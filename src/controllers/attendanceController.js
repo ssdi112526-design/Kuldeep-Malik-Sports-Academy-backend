@@ -264,18 +264,17 @@ export const generateAttendanceQr = asyncHandler(async (req, res) => {
 });
 
 export const getActiveAttendanceQr = asyncHandler(async (req, res) => {
-  const session = await ensureActiveSessionForDesk(req.user?.id);
+  let session = await ensureActiveSessionForDesk(req.user?.id);
   if (!session) {
     return res.json({ success: true, data: { session: null, ttlSeconds: QR_TTL_SECONDS } });
   }
+  // Heal ACTIVE sessions that lost displayToken (QR image would otherwise be blank).
   if (!session.displayToken) {
-    return res.json({
-      success: true,
-      data: {
-        session: publicSession(session),
-        ttlSeconds: QR_TTL_SECONDS,
-        message: 'Active session exists but QR payload was not retained. Generate a new QR.',
-      },
+    const rawToken = makeRawToken();
+    session = await prisma.attendanceSession.update({
+      where: { id: session.id },
+      data: { displayToken: rawToken, tokenHash: hashToken(rawToken) },
+      include: { createdBy: { select: { id: true, name: true } } },
     });
   }
   const assets = await buildQrAssets(session, session.displayToken);
@@ -637,7 +636,7 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
     const buffer = await toAttendanceReportXlsx({
       dailyRows,
       summaryRows,
-      title: `Raghunandan wrestling academy Attendance — ${stamp}`,
+      title: `Kuldeep Malik Sports Academy Attendance — ${stamp}`,
     });
     const filename = `raghunandan_akhada_attendance_${stamp.toLowerCase().replace(/\s+/g, '_')}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

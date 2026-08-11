@@ -9,6 +9,7 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/seed/seed.js",
     "seed:rbac": "node src/seed/seedRbac.js",
+    "seed:cms": "node src/seed/seedCmsDefaults.js",
     "seed:attendance-demo": "node scripts/seedAttendanceDemo.js",
     "seed:attendance-demo:reset": "node scripts/seedAttendanceDemo.js reset",
     "dedupe:attendance": "node scripts/dedupeAttendanceByDate.js",

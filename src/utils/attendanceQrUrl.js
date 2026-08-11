@@ -10,9 +10,10 @@ export function getPublicWebOrigin() {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const preferred = list.find((u) => /fastsearch\.in/i.test(u) && /^https:\/\//i.test(u));
+  const preferred = list.find((u) => /kushti\.co\.in/i.test(u) && /^https:\/\//i.test(u));
+  const legacy = list.find((u) => /fastsearch\.in/i.test(u) && /^https:\/\//i.test(u));
   const https = list.find((u) => /^https:\/\//i.test(u));
-  return (preferred || https || list[0] || 'https://www.fastsearch.in').replace(/\/$/, '');
+  return (preferred || legacy || https || list[0] || 'https://www.kushti.co.in').replace(/\/$/, '');
 }
 
 export function encodeAttendanceQrContent(payload) {

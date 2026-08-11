@@ -19,7 +19,7 @@ async function main() {
   if (!user) {
     user = await prisma.user.create({
       data: {
-        name: 'Super Admin',
+        name: 'Ashwani Kumar',
         email,
         username: 'superadmin',
         password: hashed,
@@ -36,6 +36,10 @@ async function main() {
         isActive: true,
         role: 'admin',
         username: user.username || 'superadmin',
+        name:
+          !user.name || user.name === 'Admin' || user.name === 'Super Admin'
+            ? 'Ashwani Kumar'
+            : user.name,
       },
     });
     console.log('Updated admin password for:', email);

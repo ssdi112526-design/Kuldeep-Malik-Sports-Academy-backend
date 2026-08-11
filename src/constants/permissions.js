@@ -1,4 +1,4 @@
-/** Canonical permission catalog for Raghunandan wrestling academy admin RBAC */
+/** Canonical permission catalog for Kuldeep Malik Sports Academy admin RBAC */
 
 export const PERMISSION_ACTIONS = [
   'view',
@@ -20,7 +20,6 @@ export const REMOVED_ROLE_MENUS = [
   'testimonials',
   'website_settings',
   'hero',
-  'membership',
   'contact',
   'language',
   'reports',
@@ -34,7 +33,10 @@ export const MENU_DEFINITIONS = [
   { menu: 'programs', label: 'Programs', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'gallery', label: 'Gallery', actions: ['view', 'create', 'edit', 'delete', 'upload', 'download', 'publish'] },
   { menu: 'facilities', label: 'Facilities', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
+  { menu: 'features', label: 'Features', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'videos', label: 'Videos', actions: ['view', 'create', 'edit', 'delete', 'upload', 'publish'] },
+  { menu: 'membership', label: 'Membership', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
+  { menu: 'website_content', label: 'Website Content', actions: ['view', 'edit', 'upload'] },
   { menu: 'students', label: 'Students', actions: ['view', 'create', 'edit', 'delete', 'export', 'import', 'upload', 'print', 'reset_password'] },
   { menu: 'coaches', label: 'Coaches', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload', 'reset_password'] },
   { menu: 'equipment', label: 'Equipment & Tools', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload'] },
@@ -70,13 +72,24 @@ export function getSystemRolePermissionKeys(allKeys) {
 
   // Coach / manager / reception get full action sets for their menus (system defaults).
   // Custom roles still store exact checkbox state with no inheritance.
-  const coachMenus = ['dashboard', 'students', 'schedule', 'attendance', 'achievements', 'videos', 'gallery'];
+  const coachMenus = ['dashboard', 'students', 'schedule', 'attendance', 'achievements', 'videos', 'gallery', 'features'];
   const coach = allKeys.filter((k) => coachMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const managerMenus = ['dashboard', 'programs', 'gallery', 'facilities', 'videos', 'students', 'attendance'];
+  const managerMenus = [
+    'dashboard',
+    'programs',
+    'gallery',
+    'facilities',
+    'features',
+    'videos',
+    'membership',
+    'website_content',
+    'students',
+    'attendance',
+  ];
   const manager = allKeys.filter((k) => managerMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const receptionMenus = ['students', 'inquiries', 'dashboard', 'attendance', 'finance'];
+  const receptionMenus = ['students', 'inquiries', 'dashboard', 'attendance', 'finance', 'membership'];
   const reception = allKeys.filter((k) => receptionMenus.some((m) => k.startsWith(`${m}.`)));
 
   const accountantMenus = ['dashboard', 'students', 'finance'];

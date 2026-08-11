@@ -97,6 +97,16 @@ export const uploadVideoMedia = multer({
   limits: { fileSize: MAX_VIDEO },
 }).single('video');
 
+/** Website site-settings images (hero + about) */
+export const uploadSiteSettings = multer({
+  storage: imageStorage,
+  fileFilter: imageFilter,
+  limits: { fileSize: MAX_IMAGE },
+}).fields([
+  { name: 'heroImage', maxCount: 1 },
+  { name: 'aboutImage', maxCount: 1 },
+]);
+
 // ---------------------------
 // Entry Management uploads
 // ---------------------------
