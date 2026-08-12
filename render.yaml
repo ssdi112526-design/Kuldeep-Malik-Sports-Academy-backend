@@ -4,8 +4,8 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install && npx prisma generate
-    startCommand: node index.js
+    buildCommand: npm install --no-audit --no-fund && npx prisma generate
+    startCommand: npm start
     healthCheckPath: /api
     envVars:
       - key: NODE_ENV
@@ -18,6 +18,8 @@ services:
         value: 7d
       - key: CLIENT_URL
         sync: false
+      - key: CLIENT_PUBLIC_URL
+        sync: false
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
@@ -26,3 +28,7 @@ services:
         sync: false
       - key: RESEND_FROM
         sync: false
+      - key: ATTENDANCE_QR_TTL_SECONDS
+        value: "60"
+      - key: ALLOW_DEMO_SEED
+        value: "false"
