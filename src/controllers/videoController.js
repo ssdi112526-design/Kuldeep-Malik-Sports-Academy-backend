@@ -10,6 +10,7 @@ import {
   generateVideoThumbnail,
   getVideoDurationLabel,
 } from '../services/videoThumbService.js';
+import { scheduleRememberUpload, uploadsFileExists } from '../utils/mediaBlobStore.js';
 
 export const VIDEO_CATEGORIES = [
   'Dangal Highlights',
@@ -110,6 +111,12 @@ export const videoUpdateValidation = [
 export const videoIdValidation = idParam;
 export const videoSlugValidation = slugParam;
 
+function isPlayableOnDisk(video) {
+  if (video?.youtubeUrl || video?.vimeoUrl) return true;
+  if (!video?.videoFile) return false;
+  return uploadsFileExists(video.videoFile);
+}
+
 export const listVideosPublic = asyncHandler(async (req, res) => {
   const category = (req.query.category || '').trim();
   const where = {
@@ -128,11 +135,18 @@ export const listVideosPublic = asyncHandler(async (req, res) => {
     }),
   ]);
 
+  // Hide broken uploads (Render disk wipe) so the homepage doesn't show unplayable players
+  const playable = videos.filter(isPlayableOnDisk);
+  const playableFeatured =
+    featured && isPlayableOnDisk(featured)
+      ? featured
+      : playable.find((v) => v.isFeatured) || playable[0] || null;
+
   res.json({
     success: true,
     data: {
-      videos: withIds(videos),
-      featured: featured ? withId(featured) : null,
+      videos: withIds(playable),
+      featured: playableFeatured ? withId(playableFeatured) : null,
       categories: VIDEO_CATEGORIES,
     },
   });
@@ -281,6 +295,10 @@ export const createVideo = asyncHandler(async (req, res) => {
     },
   });
 
+  // Durable backup so redeploys don't 404 the MP4 (thumbnails already persist in generateVideoThumbnail)
+  scheduleRememberUpload(abs, videoUpload.mimetype || 'video/mp4');
+  if (thumbnail) scheduleRememberUpload(thumbnail, 'image/jpeg');
+
   res.status(201).json({ success: true, message: 'Video created', data: { video: withId(video) } });
 });
 
@@ -369,6 +387,12 @@ export const updateVideo = asyncHandler(async (req, res) => {
       }),
     },
   });
+
+  if (videoUpload) {
+    const abs = path.join(VIDEOS_DIR, videoUpload.filename);
+    scheduleRememberUpload(abs, videoUpload.mimetype || 'video/mp4');
+    if (thumbnail) scheduleRememberUpload(thumbnail, 'image/jpeg');
+  }
 
   res.json({ success: true, message: 'Video updated', data: { video: withId(video) } });
 });

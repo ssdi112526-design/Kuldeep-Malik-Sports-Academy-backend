@@ -7,7 +7,7 @@ import path from 'path';
 import prisma from '../config/db.js';
 import { UPLOADS_DIR } from '../middleware/upload.js';
 
-const MAX_BLOB_BYTES = Number(process.env.MEDIA_BLOB_MAX_BYTES || 40 * 1024 * 1024);
+const MAX_BLOB_BYTES = Number(process.env.MEDIA_BLOB_MAX_BYTES || 60 * 1024 * 1024);
 
 function mimeFromExt(filePath) {
   const ext = path.extname(filePath).toLowerCase();
@@ -46,14 +46,9 @@ export async function rememberUploadPath(absoluteOrPublicPath, mimeType) {
     const stat = fs.statSync(absolute);
     if (stat.size <= 0) return false;
     const mime = mimeType || mimeFromExt(absolute);
-    // Never buffer full videos into Postgres — OOM on Render free tier kills the upload request.
-    if (String(mime).startsWith('video/') || /\.(mp4|webm|mov)$/i.test(relative)) {
-      console.warn(`[media-blob] skip video ${relative}`);
-      return false;
-    }
     if (stat.size > MAX_BLOB_BYTES) {
       console.warn(
-        `[media-blob] skip ${relative} (${Math.round(stat.size / (1024 * 1024))}MB > limit)`
+        `[media-blob] skip ${relative} (${Math.round(stat.size / (1024 * 1024))}MB > ${Math.round(MAX_BLOB_BYTES / (1024 * 1024))}MB limit)`
       );
       return false;
     }
@@ -94,8 +89,25 @@ export async function rememberMulterUploads(req) {
   for (const file of files) {
     if (!file?.path && !file?.filename) continue;
     const absolute = file.path || path.join(UPLOADS_DIR, file.filename);
+    // Persist videos after the HTTP response in videoController to avoid upload timeouts.
+    if (String(file.mimetype || '').startsWith('video/')) continue;
     await rememberUploadPath(absolute, file.mimetype);
   }
+}
+
+/** Fire-and-forget durable backup (safe after response is sent). */
+export function scheduleRememberUpload(absoluteOrPublicPath, mimeType) {
+  setImmediate(() => {
+    rememberUploadPath(absoluteOrPublicPath, mimeType).catch((err) => {
+      console.warn('[media-blob] scheduled remember failed:', err.message);
+    });
+  });
+}
+
+export function uploadsFileExists(publicPath) {
+  const relative = toUploadsRelative(publicPath);
+  if (!relative) return false;
+  return fs.existsSync(path.join(UPLOADS_DIR, relative));
 }
 
 export async function forgetUploadPath(absoluteOrPublicPath) {
