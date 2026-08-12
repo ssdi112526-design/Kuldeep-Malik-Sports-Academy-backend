@@ -15,7 +15,7 @@ import { DEFAULT_WEBSITE_SETTINGS } from '../src/seed/seedCmsDefaults.js';
 dotenv.config();
 
 const API_BASE = (
-  process.env.RENDER_API_URL || 'https://raghunandan-akhada-backend.onrender.com'
+  process.env.RENDER_API_URL || 'https://kuldeep-malik-sports-academy-backend.onrender.com'
 ).replace(/\/$/, '');
 const EMAIL = process.env.ADMIN_EMAIL || 'fastrecovery26@gmail.com';
 const PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@123456';
