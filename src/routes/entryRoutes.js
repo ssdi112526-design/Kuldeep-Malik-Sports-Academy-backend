@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { protect, requirePermission, requireAnyPermission } from '../middleware/auth.js';
 import validate from '../middleware/validate.js';
 import { handleMulterError, uploadStudentEntry, uploadCoachEntry, uploadEquipmentEntry } from '../middleware/upload.js';
+import { rememberMulterUploads } from '../utils/mediaBlobStore.js';
 import { modulePermissionKeys } from '../constants/permissions.js';
 import {
   listStudentsAdmin,
@@ -33,8 +34,13 @@ import {
 const router = Router();
 
 const runUpload = (uploader) => (req, res, next) => {
-  uploader(req, res, (err) => {
+  uploader(req, res, async (err) => {
     if (err) return handleMulterError(err, req, res, next);
+    try {
+      await rememberMulterUploads(req);
+    } catch (persistErr) {
+      console.warn('[media-blob] persist after entry upload failed:', persistErr.message);
+    }
     next();
   });
 };

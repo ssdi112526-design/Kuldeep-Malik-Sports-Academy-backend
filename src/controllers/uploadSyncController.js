@@ -4,6 +4,7 @@ import multer from 'multer';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { UPLOADS_DIR, handleMulterError } from '../middleware/upload.js';
+import { rememberUploadPath } from '../utils/mediaBlobStore.js';
 
 const tmpDir = path.join(UPLOADS_DIR, '.sync-tmp');
 if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
@@ -48,6 +49,7 @@ export const syncUploadFile = asyncHandler(async (req, res) => {
   fs.mkdirSync(path.dirname(absolute), { recursive: true });
   if (fs.existsSync(absolute)) fs.unlinkSync(absolute);
   fs.renameSync(req.file.path, absolute);
+  await rememberUploadPath(absolute, req.file.mimetype);
 
   res.json({
     success: true,

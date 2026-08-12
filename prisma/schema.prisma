@@ -1052,3 +1052,15 @@ model FinanceSequence {
   @@map("finance_sequences")
 }
 
+/// Durable copy of uploaded files (Render disk is ephemeral; Postgres survives redeploy).
+model MediaBlob {
+  relativePath String   @id @map("relative_path") @db.VarChar(500)
+  mimeType     String   @map("mime_type") @db.VarChar(120)
+  byteSize     Int      @map("byte_size")
+  data         Bytes
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("media_blobs")
+}
+

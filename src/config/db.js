@@ -10,7 +10,12 @@ function createPrisma() {
 
 function isStaleClient(client) {
   // After `prisma generate`, a cached client may miss newly added models.
-  return !client || typeof client.feature?.count !== 'function' || typeof client.membershipPlan?.count !== 'function';
+  return (
+    !client ||
+    typeof client.feature?.count !== 'function' ||
+    typeof client.membershipPlan?.count !== 'function' ||
+    typeof client.mediaBlob?.count !== 'function'
+  );
 }
 
 let prisma = globalForPrisma.prisma;

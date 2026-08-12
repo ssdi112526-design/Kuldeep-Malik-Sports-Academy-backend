@@ -193,6 +193,10 @@ export function deleteUploadedFile(filePath) {
       /* ignore */
     }
   }
+  // Best-effort durable backup cleanup (async import avoids circular init issues)
+  import('../utils/mediaBlobStore.js')
+    .then(({ forgetUploadPath }) => forgetUploadPath(filePath))
+    .catch(() => {});
 }
 
 export function handleMulterError(err, _req, _res, next) {

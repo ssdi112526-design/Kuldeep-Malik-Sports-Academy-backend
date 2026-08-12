@@ -8,6 +8,7 @@ import {
   uploadSiteSettings,
   handleMulterError,
 } from '../middleware/upload.js';
+import { rememberMulterUploads } from '../utils/mediaBlobStore.js';
 import { modulePermissionKeys } from '../constants/permissions.js';
 import {
   listProgramsPublic,
@@ -79,8 +80,13 @@ import {
 const router = Router();
 
 const runUpload = (uploader) => (req, res, next) => {
-  uploader(req, res, (err) => {
+  uploader(req, res, async (err) => {
     if (err) return handleMulterError(err, req, res, next);
+    try {
+      await rememberMulterUploads(req);
+    } catch (persistErr) {
+      console.warn('[media-blob] persist after CMS upload failed:', persistErr.message);
+    }
     next();
   });
 };

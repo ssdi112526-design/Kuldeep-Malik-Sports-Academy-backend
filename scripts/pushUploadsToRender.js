@@ -5,7 +5,7 @@
  *   node scripts/pushUploadsToRender.js
  *
  * Env (optional):
- *   RENDER_API_URL=https://raghunandan-academy-backend.onrender.com
+ *   RENDER_API_URL=https://raghunandan-akhada-backend.onrender.com
  *   ADMIN_EMAIL=...
  *   ADMIN_PASSWORD=...
  */
@@ -19,7 +19,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const API_BASE = (process.env.RENDER_API_URL || 'https://raghunandan-academy-backend.onrender.com').replace(/\/$/, '');
+const API_BASE = (process.env.RENDER_API_URL || 'https://raghunandan-akhada-backend.onrender.com').replace(/\/$/, '');
 const EMAIL = process.env.ADMIN_EMAIL || 'fastrecovery26@gmail.com';
 const PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@123456';
 const UPLOADS_DIR = path.resolve(__dirname, '../uploads');

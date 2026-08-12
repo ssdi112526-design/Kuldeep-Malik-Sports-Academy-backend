@@ -58,10 +58,21 @@ export async function generateVideoThumbnail(absoluteVideoPath) {
   const filename = `thumb-${Date.now()}-${Math.round(Math.random() * 1e9)}.jpg`;
   const outputPath = path.join(THUMBS_DIR, filename);
 
+  const finish = async () => {
+    const publicPath = toPublicPath(filename, 'thumbnails');
+    try {
+      const { rememberUploadPath } = await import('../utils/mediaBlobStore.js');
+      await rememberUploadPath(outputPath, 'image/jpeg');
+    } catch {
+      /* ignore persist errors */
+    }
+    return publicPath;
+  };
+
   try {
     await runFfmpegSeek(absoluteVideoPath, outputPath, 1.5);
     if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
-      return toPublicPath(filename, 'thumbnails');
+      return finish();
     }
   } catch {
     /* fall through */
@@ -71,7 +82,7 @@ export async function generateVideoThumbnail(absoluteVideoPath) {
     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
     await runFfmpegSeek(absoluteVideoPath, outputPath, 0);
     if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
-      return toPublicPath(filename, 'thumbnails');
+      return finish();
     }
   } catch {
     /* ignore */
