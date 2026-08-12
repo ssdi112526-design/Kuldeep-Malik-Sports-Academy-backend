@@ -304,13 +304,16 @@ model Program {
 }
 
 model GalleryItem {
-  id           String   @id @default(uuid())
-  title        String?  @db.VarChar(200)
-  category     String   @default("General") @db.VarChar(100)
-  image        String
-  displayOrder Int      @default(0) @map("display_order")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id                String   @id @default(uuid())
+  title             String?  @db.VarChar(200)
+  category          String   @default("General") @db.VarChar(100)
+  image             String
+  /** none | gold | silver | bronze | champion | national | state | winner */
+  achievementType   String   @default("none") @map("achievement_type") @db.VarChar(40)
+  achievementLabel  String?  @map("achievement_label") @db.VarChar(80)
+  displayOrder      Int      @default(0) @map("display_order")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   @@index([displayOrder])
   @@index([category])

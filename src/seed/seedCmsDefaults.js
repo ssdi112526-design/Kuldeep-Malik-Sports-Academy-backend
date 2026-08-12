@@ -8,7 +8,7 @@ export const WEBSITE_SETTING_KEY = 'website';
 export const DEFAULT_WEBSITE_SETTINGS = {
   company: {
     name: 'Kuldeep Malik Sports Academy',
-    address: '1554/31, Chhotu Ram Colony, Gohana Road, Sonipat',
+    address: '1554/31, Chhotu Ram Colony, Gohana Road, Sonip  at, Haryana',
     phones: [],
     email: '',
   },

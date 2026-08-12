@@ -5,6 +5,7 @@ import asyncHandler from '../utils/asyncHandler.js';
 import { withId, withIds } from '../utils/serialize.js';
 import { deleteUploadedFile, toPublicPath } from '../middleware/upload.js';
 import { DEFAULT_WEBSITE_SETTINGS, WEBSITE_SETTING_KEY } from '../seed/seedCmsDefaults.js';
+import { normalizeAchievementLabel, normalizeAchievementType } from '../utils/galleryAchievements.js';
 
 const parseBool = (value, fallback = undefined) => {
   if (value === undefined || value === null || value === '') return fallback;
@@ -163,6 +164,8 @@ export const galleryCreateValidation = [
   body('title').optional({ checkFalsy: true }).trim().isLength({ max: 200 }),
   body('category').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
   body('displayOrder').optional(),
+  body('achievementType').optional({ checkFalsy: true }).trim().isLength({ max: 40 }),
+  body('achievementLabel').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
 ];
 
 export const galleryUpdateValidation = [
@@ -170,6 +173,8 @@ export const galleryUpdateValidation = [
   body('title').optional({ checkFalsy: true }).trim().isLength({ max: 200 }),
   body('category').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
   body('displayOrder').optional(),
+  body('achievementType').optional({ checkFalsy: true }).trim().isLength({ max: 40 }),
+  body('achievementLabel').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
 ];
 
 export const listGalleryPublic = asyncHandler(async (_req, res) => {
@@ -219,6 +224,8 @@ export const createGalleryItem = asyncHandler(async (req, res) => {
   const baseOrder = parseOrder(req.body.displayOrder, 0);
   const category = (req.body.category || 'General').trim() || 'General';
   const title = req.body.title?.trim() || null;
+  const achievementType = normalizeAchievementType(req.body.achievementType);
+  const achievementLabel = normalizeAchievementLabel(achievementType, req.body.achievementLabel);
 
   const created = await prisma.$transaction(
     files.map((file, index) =>
@@ -228,6 +235,8 @@ export const createGalleryItem = asyncHandler(async (req, res) => {
           category,
           image: toPublicPath(file.filename),
           displayOrder: baseOrder + index,
+          achievementType,
+          achievementLabel,
         },
       })
     )
@@ -250,14 +259,29 @@ export const updateGalleryItem = asyncHandler(async (req, res) => {
     image = toPublicPath(req.file.filename);
   }
 
+  const data = {
+    ...(req.body.title !== undefined && { title: req.body.title.trim() || null }),
+    ...(req.body.category !== undefined && { category: req.body.category.trim() || 'General' }),
+    ...(req.body.displayOrder !== undefined && { displayOrder: parseOrder(req.body.displayOrder) }),
+    image,
+  };
+
+  if (req.body.achievementType !== undefined) {
+    const nextType = normalizeAchievementType(req.body.achievementType);
+    data.achievementType = nextType;
+    // Type change without an explicit label should use the default label for the new type
+    // (do not keep a stale previous medal label).
+    data.achievementLabel = normalizeAchievementLabel(
+      nextType,
+      req.body.achievementLabel !== undefined ? req.body.achievementLabel : ''
+    );
+  } else if (req.body.achievementLabel !== undefined) {
+    data.achievementLabel = normalizeAchievementLabel(existing.achievementType, req.body.achievementLabel);
+  }
+
   const item = await prisma.galleryItem.update({
     where: { id: req.params.id },
-    data: {
-      ...(req.body.title !== undefined && { title: req.body.title.trim() || null }),
-      ...(req.body.category !== undefined && { category: req.body.category.trim() || 'General' }),
-      ...(req.body.displayOrder !== undefined && { displayOrder: parseOrder(req.body.displayOrder) }),
-      image,
-    },
+    data,
   });
 
   res.json({ success: true, message: 'Gallery item updated', data: { item: withId(item) } });
