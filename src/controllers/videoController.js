@@ -240,9 +240,18 @@ export const createVideo = asyncHandler(async (req, res) => {
   let duration = req.body.duration?.trim() || null;
 
   const abs = path.join(VIDEOS_DIR, videoUpload.filename);
-  thumbnail = await generateVideoThumbnail(abs);
+  // Thumbnail/duration are best-effort — never fail the upload if ffmpeg is slow/unavailable
+  try {
+    thumbnail = await generateVideoThumbnail(abs);
+  } catch (err) {
+    console.warn('[videos] thumbnail failed:', err.message || err);
+  }
   if (!duration) {
-    duration = (await getVideoDurationLabel(abs)) || null;
+    try {
+      duration = (await getVideoDurationLabel(abs)) || null;
+    } catch (err) {
+      console.warn('[videos] duration failed:', err.message || err);
+    }
   }
 
   const slug = await uniqueSlug(req.body.title);
@@ -293,13 +302,21 @@ export const updateVideo = asyncHandler(async (req, res) => {
     fileSize = videoUpload.size || 0;
 
     const abs = path.join(VIDEOS_DIR, videoUpload.filename);
-    const generated = await generateVideoThumbnail(abs);
-    if (generated) {
-      deleteUploadedFile(existing.thumbnail);
-      thumbnail = generated;
+    try {
+      const generated = await generateVideoThumbnail(abs);
+      if (generated) {
+        deleteUploadedFile(existing.thumbnail);
+        thumbnail = generated;
+      }
+    } catch (err) {
+      console.warn('[videos] thumbnail failed:', err.message || err);
     }
     if (req.body.duration === undefined || !req.body.duration?.trim()) {
-      duration = (await getVideoDurationLabel(abs)) || duration;
+      try {
+        duration = (await getVideoDurationLabel(abs)) || duration;
+      } catch (err) {
+        console.warn('[videos] duration failed:', err.message || err);
+      }
     }
   }
 

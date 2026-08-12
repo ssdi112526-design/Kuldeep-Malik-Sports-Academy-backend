@@ -8,15 +8,26 @@ import { THUMBS_DIR, UPLOADS_DIR, toPublicPath } from '../middleware/upload.js';
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 if (ffprobePath?.path) ffmpeg.setFfprobePath(ffprobePath.path);
 
+const FFMPEG_TIMEOUT_MS = Number(process.env.VIDEO_THUMB_TIMEOUT_MS || 20_000);
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function runFfmpegSeek(inputPath, outputPath, seekSeconds) {
   return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
+    const command = ffmpeg(inputPath)
       .inputOptions([`-ss ${seekSeconds}`])
       .outputOptions(['-frames:v 1', '-q:v 2'])
       .output(outputPath)
       .on('end', () => resolve(true))
-      .on('error', (err) => reject(err))
-      .run();
+      .on('error', (err) => reject(err));
+
+    command.run();
   });
 }
 
@@ -50,6 +61,7 @@ export function absoluteFromPublic(publicPath) {
 /**
  * Extract a JPEG thumbnail from a local video file.
  * Tries ~1.5s first, then falls back to the first frame.
+ * Hard-timeouts so hung ffmpeg cannot kill the HTTP upload request.
  */
 export async function generateVideoThumbnail(absoluteVideoPath) {
   if (!absoluteVideoPath || !fs.existsSync(absoluteVideoPath)) return null;
@@ -70,22 +82,30 @@ export async function generateVideoThumbnail(absoluteVideoPath) {
   };
 
   try {
-    await runFfmpegSeek(absoluteVideoPath, outputPath, 1.5);
+    await withTimeout(
+      runFfmpegSeek(absoluteVideoPath, outputPath, 1.5),
+      FFMPEG_TIMEOUT_MS,
+      'ffmpeg thumb seek'
+    );
     if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
       return finish();
     }
-  } catch {
-    /* fall through */
+  } catch (err) {
+    console.warn('[video-thumb]', err.message || err);
   }
 
   try {
     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-    await runFfmpegSeek(absoluteVideoPath, outputPath, 0);
+    await withTimeout(
+      runFfmpegSeek(absoluteVideoPath, outputPath, 0),
+      FFMPEG_TIMEOUT_MS,
+      'ffmpeg thumb frame0'
+    );
     if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
       return finish();
     }
-  } catch {
-    /* ignore */
+  } catch (err) {
+    console.warn('[video-thumb]', err.message || err);
   }
 
   if (fs.existsSync(outputPath)) {
@@ -99,6 +119,15 @@ export async function generateVideoThumbnail(absoluteVideoPath) {
 }
 
 export async function getVideoDurationLabel(absoluteVideoPath) {
-  const seconds = await probeDuration(absoluteVideoPath);
-  return formatDuration(seconds);
+  try {
+    const seconds = await withTimeout(
+      probeDuration(absoluteVideoPath),
+      FFMPEG_TIMEOUT_MS,
+      'ffprobe duration'
+    );
+    return formatDuration(seconds);
+  } catch (err) {
+    console.warn('[video-duration]', err.message || err);
+    return null;
+  }
 }

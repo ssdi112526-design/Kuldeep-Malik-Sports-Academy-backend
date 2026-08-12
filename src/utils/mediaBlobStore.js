@@ -45,6 +45,12 @@ export async function rememberUploadPath(absoluteOrPublicPath, mimeType) {
 
     const stat = fs.statSync(absolute);
     if (stat.size <= 0) return false;
+    const mime = mimeType || mimeFromExt(absolute);
+    // Never buffer full videos into Postgres — OOM on Render free tier kills the upload request.
+    if (String(mime).startsWith('video/') || /\.(mp4|webm|mov)$/i.test(relative)) {
+      console.warn(`[media-blob] skip video ${relative}`);
+      return false;
+    }
     if (stat.size > MAX_BLOB_BYTES) {
       console.warn(
         `[media-blob] skip ${relative} (${Math.round(stat.size / (1024 * 1024))}MB > limit)`
@@ -53,7 +59,6 @@ export async function rememberUploadPath(absoluteOrPublicPath, mimeType) {
     }
 
     const data = fs.readFileSync(absolute);
-    const mime = mimeType || mimeFromExt(absolute);
     await prisma.mediaBlob.upsert({
       where: { relativePath: relative },
       create: {
