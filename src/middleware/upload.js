@@ -15,6 +15,7 @@ export const ENTRY_PHOTOS_DIR = path.join(ENTRY_DIR, 'photos');
 export const ENTRY_DOCS_DIR = path.join(ENTRY_DIR, 'documents');
 export const COACH_CERTS_DIR = path.join(ENTRY_DIR, 'coach-certificates');
 export const ENTRY_EQUIPMENT_DIR = path.join(ENTRY_DIR, 'equipment');
+export const SPONSORSHIP_DOCS_DIR = path.join(ENTRY_DIR, 'sponsorships');
 export const QR_DIR = path.join(UPLOADS_DIR, 'qr');
 
 [
@@ -26,6 +27,7 @@ export const QR_DIR = path.join(UPLOADS_DIR, 'qr');
   ENTRY_DOCS_DIR,
   COACH_CERTS_DIR,
   ENTRY_EQUIPMENT_DIR,
+  SPONSORSHIP_DOCS_DIR,
   QR_DIR,
 ].forEach((dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -115,7 +117,7 @@ const entryStorage = multer.diskStorage({
   destination: (_req, file, cb) => {
     if (file.fieldname === 'image') return cb(null, ENTRY_EQUIPMENT_DIR);
     if (file.fieldname === 'certificates') return cb(null, COACH_CERTS_DIR);
-    if (file.fieldname === 'photo') return cb(null, ENTRY_PHOTOS_DIR);
+    if (file.fieldname === 'photo' || file.fieldname === 'parentPhoto') return cb(null, ENTRY_PHOTOS_DIR);
     // aadhaarFront / aadhaarBack / panCard etc
     return cb(null, ENTRY_DOCS_DIR);
   },
@@ -156,6 +158,7 @@ const uploadEntryBase = multer({
 // Student
 export const uploadStudentEntry = uploadEntryBase.fields([
   { name: 'photo', maxCount: 1 },
+  { name: 'parentPhoto', maxCount: 1 },
   { name: 'aadhaarFront', maxCount: 1 },
   { name: 'aadhaarBack', maxCount: 1 },
   { name: 'panCard', maxCount: 1 },
@@ -173,6 +176,37 @@ export const uploadCoachEntry = uploadEntryBase.fields([
 // Equipment / Tools image
 export const uploadEquipmentEntry = uploadEntryBase.single('image');
 
+const sponsorshipStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, SPONSORSHIP_DOCS_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const safeExt = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.doc', '.docx'].includes(ext)
+      ? ext
+      : '.pdf';
+    cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+  },
+});
+
+function sponsorshipFileFilter(_req, file, cb) {
+  const allowed =
+    IMAGE_MIME.has(file.mimetype) ||
+    PDF_MIME.has(file.mimetype) ||
+    file.mimetype === 'application/msword' ||
+    file.mimetype ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    /\.(pdf|jpe?g|png|webp|docx?)$/i.test(file.originalname);
+  if (!allowed) {
+    return cb(new ApiError(400, 'Sponsorship documents must be PDF, Word, or image'));
+  }
+  cb(null, true);
+}
+
+export const uploadSponsorshipDoc = multer({
+  storage: sponsorshipStorage,
+  fileFilter: sponsorshipFileFilter,
+  limits: { fileSize: 15 * 1024 * 1024 },
+}).single('document');
+
 export function toPublicPath(filenameOrPath, subfolder = '') {
   if (!filenameOrPath) return null;
   if (filenameOrPath.startsWith('http') || filenameOrPath.startsWith('/uploads/')) {
@@ -189,14 +223,33 @@ export function deleteUploadedFile(filePath) {
   if (fs.existsSync(full)) {
     try {
       fs.unlinkSync(full);
+      console.log(`[uploads] deleted disk file: ${relative}`);
     } catch {
       /* ignore */
     }
   }
-  // Best-effort durable backup cleanup (async import avoids circular init issues)
+  // Drop Postgres backup only when no other live record still references the path
   import('../utils/mediaBlobStore.js')
-    .then(({ forgetUploadPath }) => forgetUploadPath(filePath))
+    .then(({ forgetUploadPathIfUnreferenced }) => forgetUploadPathIfUnreferenced(filePath))
     .catch(() => {});
+}
+
+/**
+ * Wrap a multer uploader so successful files are also backed up to Postgres mediaBlobStore.
+ */
+export function withMediaBlobBackup(uploader) {
+  return (req, res, next) => {
+    uploader(req, res, async (err) => {
+      if (err) return handleMulterError(err, req, res, next);
+      try {
+        const { rememberMulterUploads } = await import('../utils/mediaBlobStore.js');
+        await rememberMulterUploads(req);
+      } catch (persistErr) {
+        console.error('[media-blob] persist after upload failed:', persistErr.message);
+      }
+      next();
+    });
+  };
 }
 
 export function handleMulterError(err, _req, _res, next) {

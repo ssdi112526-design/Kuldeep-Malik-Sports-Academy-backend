@@ -424,6 +424,127 @@ export const deleteFacility = asyncHandler(async (req, res) => {
 export const facilityListValidation = listQuery;
 export const facilityIdValidation = idParam;
 
+/* ───────────── Athletes (Meet Our Wrestlers) ───────────── */
+
+export const athleteCreateValidation = [
+  body('name').trim().notEmpty().withMessage('Athlete name is required').isLength({ max: 150 }),
+  body('category').trim().notEmpty().withMessage('Category is required').isLength({ max: 120 }),
+  body('objectPosition').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
+  body('displayOrder').optional(),
+  body('isActive').optional(),
+];
+
+export const athleteUpdateValidation = [
+  ...idParam,
+  body('name').optional().trim().notEmpty().withMessage('Name cannot be empty').isLength({ max: 150 }),
+  body('category').optional().trim().notEmpty().withMessage('Category cannot be empty').isLength({ max: 120 }),
+  body('objectPosition').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
+  body('displayOrder').optional(),
+  body('isActive').optional(),
+];
+
+export const listAthletesPublic = asyncHandler(async (_req, res) => {
+  const items = await prisma.athlete.findMany({
+    where: { isActive: true },
+    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'desc' }],
+  });
+  res.json({ success: true, data: { athletes: withIds(items) } });
+});
+
+export const listAthletesAdmin = asyncHandler(async (req, res) => {
+  const page = parsePage(req.query.page, 1);
+  const limit = parseLimit(req.query.limit, 20);
+  const search = (req.query.search || '').trim();
+  const active = req.query.active || 'all';
+
+  const where = {
+    ...(search && {
+      OR: [
+        { name: { contains: search, mode: 'insensitive' } },
+        { category: { contains: search, mode: 'insensitive' } },
+      ],
+    }),
+    ...(active === 'true' && { isActive: true }),
+    ...(active === 'false' && { isActive: false }),
+  };
+
+  const [total, items] = await Promise.all([
+    prisma.athlete.count({ where }),
+    prisma.athlete.findMany({
+      where,
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      athletes: withIds(items),
+      pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
+    },
+  });
+});
+
+export const createAthlete = asyncHandler(async (req, res) => {
+  const image = req.file ? toPublicPath(req.file.filename) : null;
+  if (!image) throw new ApiError(400, 'Image is required');
+
+  const athlete = await prisma.athlete.create({
+    data: {
+      name: req.body.name.trim(),
+      category: req.body.category.trim(),
+      objectPosition: req.body.objectPosition?.trim() || null,
+      image,
+      displayOrder: parseOrder(req.body.displayOrder, 0),
+      isActive: parseBool(req.body.isActive, true),
+    },
+  });
+
+  res.status(201).json({ success: true, message: 'Athlete created', data: { athlete: withId(athlete) } });
+});
+
+export const updateAthlete = asyncHandler(async (req, res) => {
+  const existing = await prisma.athlete.findUnique({ where: { id: req.params.id } });
+  if (!existing) throw new ApiError(404, 'Athlete not found');
+
+  let image = existing.image;
+  if (req.file) {
+    deleteUploadedFile(existing.image);
+    image = toPublicPath(req.file.filename);
+  }
+
+  const athlete = await prisma.athlete.update({
+    where: { id: req.params.id },
+    data: {
+      ...(req.body.name !== undefined && { name: req.body.name.trim() }),
+      ...(req.body.category !== undefined && { category: req.body.category.trim() }),
+      ...(req.body.objectPosition !== undefined && {
+        objectPosition: req.body.objectPosition?.trim() || null,
+      }),
+      ...(req.body.displayOrder !== undefined && { displayOrder: parseOrder(req.body.displayOrder) }),
+      ...(req.body.isActive !== undefined && { isActive: parseBool(req.body.isActive) }),
+      image,
+    },
+  });
+
+  res.json({ success: true, message: 'Athlete updated', data: { athlete: withId(athlete) } });
+});
+
+export const deleteAthlete = asyncHandler(async (req, res) => {
+  const existing = await prisma.athlete.findUnique({ where: { id: req.params.id } });
+  if (!existing) throw new ApiError(404, 'Athlete not found');
+
+  await prisma.athlete.delete({ where: { id: req.params.id } });
+  deleteUploadedFile(existing.image);
+
+  res.json({ success: true, message: 'Athlete deleted' });
+});
+
+export const athleteListValidation = listQuery;
+export const athleteIdValidation = idParam;
+
 /* ───────────── Features ───────────── */
 
 export const featureCreateValidation = [
@@ -843,6 +964,9 @@ export const getContentStats = asyncHandler(async (_req, res) => {
     totalInquiries,
     todayInquiries,
     totalAchievements,
+    playerAchievementsTotal,
+    medalGroups,
+    playersWithAchievements,
     recentInquiries,
     recentStudents,
   ] = await Promise.all([
@@ -861,6 +985,13 @@ export const getContentStats = asyncHandler(async (_req, res) => {
     safeCount(prisma.contact),
     safeCount(prisma.contact, { where: { createdAt: { gte: startOfToday } } }),
     safeCount(prisma.achievement),
+    safeCount(prisma.playerAchievement),
+    prisma.playerAchievement
+      .groupBy({ by: ['medal'], _count: { _all: true } })
+      .catch(() => []),
+    prisma.playerAchievement
+      .findMany({ distinct: ['studentId'], select: { studentId: true } })
+      .catch(() => []),
     safeFindMany(prisma.contact, {
       orderBy: { createdAt: 'desc' },
       take: 5,
@@ -872,6 +1003,15 @@ export const getContentStats = asyncHandler(async (_req, res) => {
       select: { id: true, fullName: true, registrationNumber: true, createdAt: true },
     }),
   ]);
+
+  const medals = { Gold: 0, Silver: 0, Bronze: 0, Other: 0 };
+  for (const row of medalGroups || []) {
+    const key = String(row.medal || '').trim().toLowerCase();
+    if (key === 'gold') medals.Gold += row._count._all;
+    else if (key === 'silver') medals.Silver += row._count._all;
+    else if (key === 'bronze') medals.Bronze += row._count._all;
+    else if (row.medal) medals.Other += row._count._all;
+  }
 
   res.json({
     success: true,
@@ -891,6 +1031,9 @@ export const getContentStats = asyncHandler(async (_req, res) => {
       totalInquiries,
       todayInquiries,
       totalAchievements,
+      playerAchievementsTotal,
+      playersWithAchievements: (playersWithAchievements || []).length,
+      medals,
       recentInquiries: withIds(recentInquiries),
       recentStudents: withIds(
         recentStudents.map((s) => ({

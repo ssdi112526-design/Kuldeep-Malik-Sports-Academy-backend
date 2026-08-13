@@ -31,6 +31,9 @@ const COACH_SELECT = {
   mobile: true,
   specialization: true,
   photo: true,
+  employeeRole: true,
+  category: true,
+  designation: true,
 };
 
 function coachSearchWhere(search) {

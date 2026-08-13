@@ -1,6 +1,8 @@
 import { Router } from 'express';
-import { protect, requirePermission } from '../middleware/auth.js';
-import { uploadProfileImage, handleMulterError } from '../middleware/upload.js';
+import { protect, requirePermission, requireAdminAccess } from '../middleware/auth.js';
+import { uploadProfileImage, withMediaBlobBackup } from '../middleware/upload.js';
+
+const runProfileUpload = withMediaBlobBackup(uploadProfileImage);
 import {
   listUsers,
   getUser,
@@ -23,14 +25,14 @@ import {
 
 const router = Router();
 
-const usersView = [protect, requirePermission('users.view')];
-const usersCreate = [protect, requirePermission('users.create')];
-const usersEdit = [protect, requirePermission('users.edit')];
-const usersDelete = [protect, requirePermission('users.delete')];
-const rolesView = [protect, requirePermission('roles.view')];
-const rolesCreate = [protect, requirePermission('roles.create')];
-const rolesEdit = [protect, requirePermission('roles.edit')];
-const rolesDelete = [protect, requirePermission('roles.delete')];
+const usersView = [protect, requireAdminAccess, requirePermission('users.view')];
+const usersCreate = [protect, requireAdminAccess, requirePermission('users.create')];
+const usersEdit = [protect, requireAdminAccess, requirePermission('users.edit')];
+const usersDelete = [protect, requireAdminAccess, requirePermission('users.delete')];
+const rolesView = [protect, requireAdminAccess, requirePermission('roles.view')];
+const rolesCreate = [protect, requireAdminAccess, requirePermission('roles.create')];
+const rolesEdit = [protect, requireAdminAccess, requirePermission('roles.edit')];
+const rolesDelete = [protect, requireAdminAccess, requirePermission('roles.delete')];
 
 router.get('/admin/permissions', ...rolesView, listPermissionsCatalog);
 
@@ -47,15 +49,13 @@ router.get('/admin/users/:id', ...usersView, getUser);
 router.post(
   '/admin/users',
   ...usersCreate,
-  uploadProfileImage,
-  handleMulterError,
+  runProfileUpload,
   createUser
 );
 router.put(
   '/admin/users/:id',
   ...usersEdit,
-  uploadProfileImage,
-  handleMulterError,
+  runProfileUpload,
   updateUser
 );
 router.delete('/admin/users/:id', ...usersDelete, deleteUser);

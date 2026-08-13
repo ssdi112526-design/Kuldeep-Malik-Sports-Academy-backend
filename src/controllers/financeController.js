@@ -34,7 +34,12 @@ export const searchStudents = asyncHandler(async (req, res) => {
 });
 
 export const collectPreview = asyncHandler(async (req, res) => {
-  const data = await finance.getCollectPreview(req.query.studentId, req.query.month, req.query.year);
+  const data = await finance.getCollectPreview(
+    req.query.studentId,
+    req.query.month,
+    req.query.year,
+    req.query.category || 'Monthly'
+  );
   res.json({ success: true, data });
 });
 
@@ -60,13 +65,14 @@ export const generateMonthlyFees = asyncHandler(async (req, res) => {
     details: result,
     req,
   });
+  const catLabel = result.categoryLabel || result.category || req.body.category || 'Monthly';
   const parts = [`Created ${result.created}`, `updated ${result.updated}`];
-  if (result.defaultsUpdated) parts.push(`monthly fee set on ${result.defaultsUpdated} student(s)`);
+  if (result.defaultsUpdated) parts.push(`default set on ${result.defaultsUpdated} student(s)`);
   if (result.paymentsCleared) parts.push(`cleared ${result.paymentsCleared} payment(s)`);
   if (result.skipped) parts.push(`${result.skipped} skipped (₹0 fee)`);
   res.json({
     success: true,
-    message: `Monthly fees generated — ${parts.join(', ')}`,
+    message: `${catLabel} generated — ${parts.join(', ')}`,
     data: result,
   });
 });
@@ -253,6 +259,7 @@ export const exportPendingFees = asyncHandler(async (req, res) => {
   const columns = [
     { key: 'registrationNumber', label: 'Reg No' },
     { key: 'studentName', label: 'Student' },
+    { key: 'feeType', label: 'Fee Type' },
     { key: 'monthLabel', label: 'Month' },
     { key: 'feeAmount', label: 'Fee' },
     { key: 'previousDue', label: 'Previous Due' },
@@ -264,6 +271,7 @@ export const exportPendingFees = asyncHandler(async (req, res) => {
   const mapped = rows.map((r) => ({
     registrationNumber: r.student?.registrationNumber || '',
     studentName: r.student?.fullName || '',
+    feeType: r.categoryLabel || r.category || 'Monthly Fees',
     monthLabel: r.monthLabel,
     feeAmount: r.feeAmount,
     previousDue: r.previousDue,

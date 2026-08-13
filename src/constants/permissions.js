@@ -22,7 +22,6 @@ export const REMOVED_ROLE_MENUS = [
   'hero',
   'contact',
   'language',
-  'reports',
   'backup',
   'system_settings',
 ];
@@ -32,18 +31,27 @@ export const MENU_DEFINITIONS = [
   { menu: 'inquiries', label: 'Inquiries', actions: ['view', 'edit', 'delete', 'export'] },
   { menu: 'programs', label: 'Programs', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'gallery', label: 'Gallery', actions: ['view', 'create', 'edit', 'delete', 'upload', 'download', 'publish'] },
+  { menu: 'athletes', label: 'Athletes / Wrestlers', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'facilities', label: 'Facilities', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'features', label: 'Features', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'videos', label: 'Videos', actions: ['view', 'create', 'edit', 'delete', 'upload', 'publish'] },
   { menu: 'membership', label: 'Membership', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'website_content', label: 'Website Content', actions: ['view', 'edit', 'upload'] },
-  { menu: 'students', label: 'Students', actions: ['view', 'create', 'edit', 'delete', 'export', 'import', 'upload', 'print', 'reset_password'] },
-  { menu: 'coaches', label: 'Coaches', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload', 'reset_password'] },
+  { menu: 'students', label: 'Players', actions: ['view', 'create', 'edit', 'delete', 'export', 'import', 'upload', 'print', 'reset_password'] },
+  { menu: 'coaches', label: 'Employees', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload', 'reset_password'] },
   { menu: 'equipment', label: 'Equipment & Tools', actions: ['view', 'create', 'edit', 'delete', 'export', 'upload'] },
   { menu: 'schedule', label: 'Schedule', actions: ['view', 'create', 'edit', 'delete'] },
   { menu: 'attendance', label: 'Attendance', actions: ['view', 'create', 'edit', 'export'] },
-  { menu: 'finance', label: 'Finance', actions: ['view', 'create', 'edit', 'delete', 'export', 'print', 'download'] },
-  { menu: 'achievements', label: 'Achievements', actions: ['view', 'create', 'edit', 'delete'] },
+  { menu: 'finance', label: 'Fees', actions: ['view', 'create', 'edit', 'delete', 'export', 'print', 'download'] },
+  {
+    menu: 'sponsorships',
+    label: 'Sponsorships',
+    actions: ['view', 'create', 'edit', 'delete', 'upload', 'download', 'export'],
+  },
+  { menu: 'achievements', label: 'Website Achievements', actions: ['view', 'create', 'edit', 'delete'] },
+  { menu: 'player_achievements', label: 'Achievements', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
+  { menu: 'tournaments', label: 'Tournament Records', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
+  { menu: 'reports', label: 'Reports', actions: ['view', 'export', 'print', 'download'] },
   { menu: 'users', label: 'Users', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { menu: 'roles', label: 'Roles', actions: ['view', 'create', 'edit', 'delete', 'manage_settings'] },
 ];
@@ -72,13 +80,25 @@ export function getSystemRolePermissionKeys(allKeys) {
 
   // Coach / manager / reception get full action sets for their menus (system defaults).
   // Custom roles still store exact checkbox state with no inheritance.
-  const coachMenus = ['dashboard', 'students', 'schedule', 'attendance', 'achievements', 'videos', 'gallery', 'features'];
+  const coachMenus = [
+    'dashboard',
+    'students',
+    'schedule',
+    'attendance',
+    'player_achievements',
+    'tournaments',
+    'videos',
+    'gallery',
+    'athletes',
+    'features',
+  ];
   const coach = allKeys.filter((k) => coachMenus.some((m) => k.startsWith(`${m}.`)));
 
   const managerMenus = [
     'dashboard',
     'programs',
     'gallery',
+    'athletes',
     'facilities',
     'features',
     'videos',
@@ -86,13 +106,26 @@ export function getSystemRolePermissionKeys(allKeys) {
     'website_content',
     'students',
     'attendance',
+    'player_achievements',
+    'tournaments',
+    'sponsorships',
+    'reports',
   ];
   const manager = allKeys.filter((k) => managerMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const receptionMenus = ['students', 'inquiries', 'dashboard', 'attendance', 'finance', 'membership'];
+  const receptionMenus = [
+    'students',
+    'inquiries',
+    'dashboard',
+    'attendance',
+    'finance',
+    'membership',
+    'sponsorships',
+    'reports',
+  ];
   const reception = allKeys.filter((k) => receptionMenus.some((m) => k.startsWith(`${m}.`)));
 
-  const accountantMenus = ['dashboard', 'students', 'finance'];
+  const accountantMenus = ['dashboard', 'students', 'finance', 'sponsorships', 'reports'];
   const accountant = allKeys.filter(
     (k) =>
       accountantMenus.some((m) => k.startsWith(`${m}.`)) &&
@@ -107,7 +140,7 @@ export function getSystemRolePermissionKeys(allKeys) {
   // Staff: view-only — must not include create/edit/delete
   const staff = allKeys.filter((k) => k.endsWith('.view'));
 
-  // Student / coach portal roles — no admin permissions
+  // Portal roles — no admin permissions
   return {
     super_admin: superAdmin,
     admin,
@@ -118,6 +151,7 @@ export function getSystemRolePermissionKeys(allKeys) {
     staff,
     student: [],
     coach_portal: [],
+    parent: [],
   };
 }
 
@@ -138,6 +172,7 @@ export const SYSTEM_ROLES = [
   { name: 'Reception', slug: 'reception', description: 'Students, inquiries and attendance desk.', isSystem: true },
   { name: 'Accountant', slug: 'accountant', description: 'Finance, fees collection and student fee views.', isSystem: true },
   { name: 'Staff', slug: 'staff', description: 'View-only access across allowed modules.', isSystem: true },
-  { name: 'Student', slug: 'student', description: 'Student portal only — profile, QR scan and own attendance.', isSystem: true },
+  { name: 'Student', slug: 'student', description: 'Player portal only — profile, QR scan and own attendance.', isSystem: true },
   { name: 'Coach Portal', slug: 'coach_portal', description: 'Coach user panel only — profile, own attendance and account.', isSystem: true },
+  { name: 'Parent', slug: 'parent', description: 'Parent portal only — linked child profile, attendance, achievements and tournaments.', isSystem: true },
 ];

@@ -4,13 +4,13 @@ dotenv.config();
 import app from './app.js';
 import { connectDB } from './config/db.js';
 import { restoreUploadsFromSeedMedia } from './utils/restoreUploads.js';
-import { restoreMediaBlobsFromDb } from './utils/mediaBlobStore.js';
+import { startBackgroundMediaRestore } from './utils/mediaBlobStore.js';
 
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
-    // Render ephemeral disk: restore committed seed-media first
+    // Fast local seed restore (no Postgres BYTEA) — safe before listen
     try {
       restoreUploadsFromSeedMedia();
     } catch (err) {
@@ -19,15 +19,11 @@ const startServer = async () => {
 
     await connectDB();
 
-    // Then restore admin uploads backed up in Postgres (survives redeploy)
-    try {
-      await restoreMediaBlobsFromDb();
-    } catch (err) {
-      console.warn('[media-blob] DB restore failed:', err.message);
-    }
-
+    // Listen first — do not block API on large media restore
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on port ${PORT} [${process.env.NODE_ENV}]`);
+      // Background: restore only referenced missing files from Postgres
+      startBackgroundMediaRestore({ onlyReferenced: true });
     });
   } catch (error) {
     console.error('Failed to start server:', error.message);
@@ -36,4 +32,3 @@ const startServer = async () => {
 };
 
 startServer();
-

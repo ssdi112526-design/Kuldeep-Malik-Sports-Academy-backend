@@ -38,14 +38,14 @@ export const login = asyncHandler(async (req, res) => {
     where: {
       OR: [{ email: loginId }, { username: loginId }],
     },
-    include: { roleRef: true, student: true, coach: true },
+    include: { roleRef: true, student: true, coach: true, parentProfile: true },
   });
 
   // Also allow login by student registration number / coach code stored as username
   if (!user) {
     user = await prisma.user.findFirst({
       where: { username: loginId },
-      include: { roleRef: true, student: true, coach: true },
+      include: { roleRef: true, student: true, coach: true, parentProfile: true },
     });
   }
 

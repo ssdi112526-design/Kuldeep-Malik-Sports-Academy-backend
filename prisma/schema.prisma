@@ -12,6 +12,7 @@ enum UserRole {
   user
   student
   coach
+  parent
 }
 
 enum ContactStatus {
@@ -52,6 +53,7 @@ model User {
   roleRef                   Role?               @relation(fields: [roleId], references: [id], onDelete: SetNull)
   student                   Student?            @relation(fields: [studentId], references: [id], onDelete: Cascade)
   coach                     Coach?              @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  parentProfile             ParentProfile?
   auditLogs                 AuditLog[]
   attendanceSessionsCreated      AttendanceSession[]
   coachAttendanceSessionsCreated CoachAttendanceSession[]
@@ -335,6 +337,22 @@ model Facility {
   @@map("facilities")
 }
 
+/// Public “Meet Our Wrestlers” showcase athletes (admin-managed)
+model Athlete {
+  id             String   @id @default(uuid())
+  name           String   @db.VarChar(150)
+  category       String   @db.VarChar(120)
+  image          String?  @db.VarChar(500)
+  objectPosition String?  @map("object_position") @db.VarChar(80)
+  displayOrder   Int      @default(0) @map("display_order")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([displayOrder, isActive])
+  @@map("athletes")
+}
+
 model Feature {
   id             String   @id @default(uuid())
   titleEn        String   @map("title_en") @db.VarChar(200)
@@ -543,6 +561,8 @@ model Student {
 
   // Student photo
   photo String? @db.VarChar(400)
+  // Parent / guardian photo (on player record)
+  parentPhoto String? @map("parent_photo") @db.VarChar(400)
 
   // Training
   joiningDate DateTime @map("joining_date")
@@ -558,7 +578,11 @@ model Student {
   weightKg Int? @default(0) @map("weight_kg")
   chest Int? @default(0) @map("chest")
   age Int? @default(0)
-  category String? // as provided
+  category String? // as provided (player category e.g. Khelo India)
+  /// Optional wrestling age group label (e.g. U15, U17, Senior)
+  ageCategory String? @map("age_category") @db.VarChar(80)
+  /// Optional wrestling weight class label (e.g. 57 KG)
+  weightCategory String? @map("weight_category") @db.VarChar(80)
 
   // Emergency
   guardianName String? @map("guardian_name")
@@ -582,6 +606,8 @@ model Student {
 
   /// Manual fee defaults (INR) — finance module
   monthlyFee      Decimal @default(0) @map("monthly_fee") @db.Decimal(12, 2)
+  hostelFee       Decimal @default(0) @map("hostel_fee") @db.Decimal(12, 2)
+  otherFee        Decimal @default(0) @map("other_fee") @db.Decimal(12, 2)
   admissionFee    Decimal @default(0) @map("admission_fee") @db.Decimal(12, 2)
   defaultDiscount Decimal @default(0) @map("default_discount") @db.Decimal(12, 2)
   advanceBalance  Decimal @default(0) @map("advance_balance") @db.Decimal(12, 2)
@@ -601,6 +627,9 @@ model Student {
   attendanceSessionsUsed AttendanceSession[] @relation("AttendanceSessionUsedBy")
   feeMonths             StudentFeeMonth[]
   feePayments           StudentFeePayment[]
+  playerAchievements    PlayerAchievement[]
+  tournamentResults     TournamentResult[]
+  parentLinks           ParentStudentLink[]
 
   @@index([status])
   @@index([coachId])
@@ -608,6 +637,10 @@ model Student {
   @@index([membershipType])
   @@index([joiningDate])
   @@index([biometricUserId])
+  @@index([ageCategory])
+  @@index([weightCategory])
+  @@index([category])
+  @@index([mobileNumber])
   @@map("students")
 }
 
@@ -635,10 +668,11 @@ model Coach {
   photo String? @db.VarChar(400)
 
   fullName String @db.VarChar(150) @map("full_name")
-  fatherName String @db.VarChar(150) @map("father_name")
+  fatherName String? @db.VarChar(150) @map("father_name")
   mobile String @db.VarChar(20)
   email String? @db.VarChar(255)
   dateOfBirth DateTime @map("date_of_birth")
+  gender String? @db.VarChar(20)
 
   address String? @db.VarChar(300)
 
@@ -648,14 +682,18 @@ model Coach {
   qualification String?
   salary Int? @default(0)
   joiningDate DateTime? @map("joining_date")
+  /// Job role label (independent from category)
+  employeeRole String? @map("employee_role") @db.VarChar(120)
+  /// Controlled category: Coach | Assistant Coach | Warden | Cook | Cleaner | Physio
+  category String? @map("employee_category") @db.VarChar(40)
 
   status CoachStatus @default(Active)
   showOnWebsite Boolean @default(false) @map("show_on_website")
   websiteOrder Int @default(0) @map("website_order")
 
-  // Identity numbers (images live in CoachDocument)
-  aadhaarNumber String @unique @db.VarChar(12) @map("aadhaar_number")
-  panNumber String @unique @db.VarChar(10) @map("pan_number")
+  // Identity numbers (images live in CoachDocument) — optional
+  aadhaarNumber String? @unique @db.VarChar(12) @map("aadhaar_number")
+  panNumber String? @unique @db.VarChar(10) @map("pan_number")
 
   // Profile
   achievements String?
@@ -680,6 +718,7 @@ model Coach {
 
   @@index([status])
   @@index([biometricUserId])
+  @@index([mobile])
   @@map("coaches")
 }
 
@@ -712,6 +751,10 @@ enum AttendanceSessionStatus {
 
 enum AttendanceStatus {
   present
+  absent
+  leave
+  medical_leave
+  competition_leave
 }
 
 model AttendanceSession {
@@ -935,6 +978,12 @@ enum FeeMonthStatus {
   Overdue
 }
 
+enum StudentFeeCategory {
+  Monthly
+  Hostel
+  Other
+}
+
 enum FinancePaymentMode {
   Cash
   UPI
@@ -948,31 +997,34 @@ enum CoachPayStatus {
   Pending
 }
 
-/// Monthly fee obligation per student (unique student + month + year)
+/// Fee obligation per student + month + year + category (Monthly / Hostel / Other)
 model StudentFeeMonth {
-  id           String         @id @default(uuid())
-  studentId    String         @map("student_id")
+  id           String              @id @default(uuid())
+  studentId    String              @map("student_id")
   month        Int
   year         Int
-  feeAmount    Decimal        @map("fee_amount") @db.Decimal(12, 2)
-  previousDue  Decimal        @default(0) @map("previous_due") @db.Decimal(12, 2)
-  discount     Decimal        @default(0) @db.Decimal(12, 2)
-  paidAmount   Decimal        @default(0) @map("paid_amount") @db.Decimal(12, 2)
-  remainingDue Decimal        @default(0) @map("remaining_due") @db.Decimal(12, 2)
-  status       FeeMonthStatus @default(Due)
-  dueDate      DateTime?      @map("due_date")
-  notes        String?        @db.VarChar(500)
-  createdById  String?        @map("created_by_id")
-  updatedById  String?        @map("updated_by_id")
-  createdAt    DateTime       @default(now()) @map("created_at")
-  updatedAt    DateTime       @updatedAt @map("updated_at")
-  deletedAt    DateTime?      @map("deleted_at")
+  category     StudentFeeCategory  @default(Monthly)
+  title        String?             @db.VarChar(200)
+  feeAmount    Decimal             @map("fee_amount") @db.Decimal(12, 2)
+  previousDue  Decimal             @default(0) @map("previous_due") @db.Decimal(12, 2)
+  discount     Decimal             @default(0) @db.Decimal(12, 2)
+  paidAmount   Decimal             @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  remainingDue Decimal             @default(0) @map("remaining_due") @db.Decimal(12, 2)
+  status       FeeMonthStatus      @default(Due)
+  dueDate      DateTime?           @map("due_date")
+  notes        String?             @db.VarChar(500)
+  createdById  String?             @map("created_by_id")
+  updatedById  String?             @map("updated_by_id")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
+  deletedAt    DateTime?           @map("deleted_at")
 
   student  Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
   payments StudentFeePayment[]
 
-  @@unique([studentId, month, year])
+  @@unique([studentId, month, year, category])
   @@index([status])
+  @@index([category])
   @@index([year, month])
   @@index([deletedAt])
   @@map("student_fee_months")
@@ -1065,5 +1117,146 @@ model MediaBlob {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@map("media_blobs")
+}
+
+/** Parent portal account — linked to one or more players (students) */
+model ParentProfile {
+  id        String   @id @default(uuid())
+  userId    String   @unique @map("user_id")
+  fullName  String   @map("full_name") @db.VarChar(150)
+  phone     String?  @db.VarChar(20)
+  email     String?  @db.VarChar(255)
+  relation  String?  @db.VarChar(80)
+  photo     String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  links ParentStudentLink[]
+
+  @@index([phone])
+  @@map("parent_profiles")
+}
+
+model ParentStudentLink {
+  id        String   @id @default(uuid())
+  parentId  String   @map("parent_id")
+  studentId String   @map("student_id")
+  relation  String?  @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  parent  ParentProfile @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  student Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([parentId, studentId])
+  @@index([studentId])
+  @@map("parent_student_links")
+}
+
+/** Per-player competition achievements (separate from CMS homepage Achievement stats) */
+model PlayerAchievement {
+  id              String    @id @default(uuid())
+  /// Optional link to registered student (legacy); prefer playerName for public display
+  studentId       String?   @map("student_id")
+  /// Free-text player name shown on public website
+  playerName      String?   @map("player_name") @db.VarChar(150)
+  title           String    @db.VarChar(200)
+  description     String?   @db.VarChar(2000)
+  achievementType String?   @map("achievement_type") @db.VarChar(80)
+  tournamentId    String?   @map("tournament_id")
+  tournamentName  String?   @map("tournament_name") @db.VarChar(200)
+  achievedOn      DateTime? @map("achieved_on")
+  year            Int?
+  medal           String?   @db.VarChar(40)
+  result          String?   @db.VarChar(120)
+  image           String?   @db.VarChar(500)
+  /// When true, achievement appears on the public Champions Wall
+  showOnWebsite   Boolean   @default(true) @map("show_on_website")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  student    Student?    @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  tournament Tournament? @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
+
+  @@index([studentId])
+  @@index([playerName])
+  @@index([tournamentId])
+  @@index([medal])
+  @@index([year])
+  @@index([achievedOn])
+  @@index([showOnWebsite])
+  @@map("player_achievements")
+}
+
+model Tournament {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(200)
+  eventDate DateTime @map("event_date")
+  location  String?  @db.VarChar(200)
+  category  String?  @db.VarChar(120)
+  remarks   String?  @db.VarChar(2000)
+  image     String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  results            TournamentResult[]
+  playerAchievements PlayerAchievement[]
+
+  @@index([eventDate])
+  @@map("tournaments")
+}
+
+model TournamentResult {
+  id           String  @id @default(uuid())
+  tournamentId String  @map("tournament_id")
+  studentId    String  @map("student_id")
+  category     String? @db.VarChar(120)
+  result       String? @db.VarChar(120)
+  position     String? @db.VarChar(40)
+  medal        String? @db.VarChar(40)
+  remarks      String? @db.VarChar(2000)
+  image        String? @db.VarChar(500)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  student    Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, studentId])
+  @@index([studentId])
+  @@map("tournament_results")
+}
+
+enum SponsorshipStatus {
+  Active
+  Expired
+  Upcoming
+  Cancelled
+}
+
+/// Admin-only sponsorship / partnership records (not public)
+model Sponsorship {
+  id               String             @id @default(uuid())
+  sponsorName      String             @map("sponsor_name") @db.VarChar(200)
+  sponsorshipType  String             @map("sponsorship_type") @db.VarChar(120)
+  amount           Decimal            @default(0) @db.Decimal(12, 2)
+  startDate        DateTime           @map("start_date")
+  endDate          DateTime?          @map("end_date")
+  status           SponsorshipStatus  @default(Active)
+  documentPath     String?            @map("document_path") @db.VarChar(500)
+  documentName     String?            @map("document_name") @db.VarChar(255)
+  notes            String?            @db.VarChar(2000)
+  createdById      String?            @map("created_by_id")
+  updatedById      String?            @map("updated_by_id")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+  deletedAt        DateTime?          @map("deleted_at")
+
+  @@index([sponsorName])
+  @@index([status])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([deletedAt])
+  @@map("sponsorships")
 }
 

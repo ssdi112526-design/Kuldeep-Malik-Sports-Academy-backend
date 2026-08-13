@@ -1,6 +1,11 @@
 import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import {
+  normalizeFeeCategory,
+  feeCategoryLabel,
+  studentDefaultFeeField,
+} from '../constants/feeCategories.js';
+import {
   money,
   moneyStr,
   addMoney,
@@ -55,14 +60,20 @@ export function serializeMoney(obj) {
   return out;
 }
 
-/** Sum remaining due across open fee months for a student */
-export async function getStudentOutstanding(studentId, excludeFeeMonthId = null, db = prisma) {
+/** Sum remaining due across open fee months for a student (optionally one category) */
+export async function getStudentOutstanding(
+  studentId,
+  excludeFeeMonthId = null,
+  db = prisma,
+  category = null
+) {
   const where = {
     studentId,
     deletedAt: null,
     status: { in: ['Due', 'Partial', 'Overdue'] },
   };
   if (excludeFeeMonthId) where.id = { not: excludeFeeMonthId };
+  if (category) where.category = normalizeFeeCategory(category);
   const rows = await db.studentFeeMonth.findMany({
     where,
     select: { remainingDue: true },
@@ -118,6 +129,8 @@ export async function updateStudentFeeDefaults(studentId, payload, userId) {
 
   const data = {};
   if (payload.monthlyFee != null) data.monthlyFee = dec(payload.monthlyFee);
+  if (payload.hostelFee != null) data.hostelFee = dec(payload.hostelFee);
+  if (payload.otherFee != null) data.otherFee = dec(payload.otherFee);
   if (payload.admissionFee != null) data.admissionFee = dec(payload.admissionFee);
   if (payload.defaultDiscount != null) data.defaultDiscount = dec(payload.defaultDiscount);
 
@@ -164,6 +177,8 @@ export async function listStudentFees({
         mobileNumber: true,
         status: true,
         monthlyFee: true,
+        hostelFee: true,
+        otherFee: true,
         admissionFee: true,
         defaultDiscount: true,
         advanceBalance: true,
@@ -238,6 +253,8 @@ export async function searchStudentsForCollect(q) {
       photo: true,
       mobileNumber: true,
       monthlyFee: true,
+      hostelFee: true,
+      otherFee: true,
       admissionFee: true,
       defaultDiscount: true,
       advanceBalance: true,
@@ -255,19 +272,21 @@ export async function searchStudentsForCollect(q) {
   return withDue;
 }
 
-export async function getCollectPreview(studentId, month, year) {
+export async function getCollectPreview(studentId, month, year, categoryInput = 'Monthly') {
   const { month: m, year: y } = parseMonthYear(month, year);
+  const category = normalizeFeeCategory(categoryInput);
   const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) throw new ApiError(404, 'Student not found');
 
   const existing = await prisma.studentFeeMonth.findFirst({
-    where: { studentId, month: m, year: y, deletedAt: null },
+    where: { studentId, month: m, year: y, category, deletedAt: null },
   });
   const previousDue = existing
     ? money(existing.previousDue)
-    : await getStudentOutstanding(studentId);
+    : await getStudentOutstanding(studentId, null, prisma, category);
 
-  const feeAmount = existing ? money(existing.feeAmount) : money(student.monthlyFee);
+  const defaultField = studentDefaultFeeField(category);
+  const feeAmount = existing ? money(existing.feeAmount) : money(student[defaultField] || 0);
   const discount = existing ? money(existing.discount) : money(student.defaultDiscount);
   const paidAmount = existing ? money(existing.paidAmount) : 0;
   const totalOutstanding = clampNonNegative(addMoney(feeAmount, previousDue) - discount - paidAmount);
@@ -282,14 +301,19 @@ export async function getCollectPreview(studentId, month, year) {
       fatherName: student.fatherName,
       mobileNumber: student.mobileNumber,
       monthlyFee: student.monthlyFee,
+      hostelFee: student.hostelFee,
+      otherFee: student.otherFee,
       admissionFee: student.admissionFee,
       defaultDiscount: student.defaultDiscount,
       advanceBalance: student.advanceBalance,
     },
     month: m,
     year: y,
+    category,
+    categoryLabel: feeCategoryLabel(category),
     monthLabel: monthLabel(m, y),
     feeMonthId: existing?.id || null,
+    title: existing?.title || null,
     feeAmount,
     previousDue,
     discount,
@@ -302,6 +326,11 @@ export async function getCollectPreview(studentId, month, year) {
 export async function collectStudentFee(payload, userId) {
   const studentId = payload.studentId;
   const { month, year } = parseMonthYear(payload.month, payload.year);
+  const category = normalizeFeeCategory(payload.category || 'Monthly');
+  const title =
+    category === 'Other'
+      ? String(payload.title || payload.notes || '').trim() || 'Other Fees'
+      : null;
   const paymentMode = assertMode(payload.paymentMode);
   const paidAmount = money(payload.paidAmount);
   if (paidAmount <= 0) throw new ApiError(400, 'Paid amount must be greater than zero');
@@ -318,14 +347,17 @@ export async function collectStudentFee(payload, userId) {
     if (!student) throw new ApiError(404, 'Student not found');
 
     let fee = await tx.studentFeeMonth.findFirst({
-      where: { studentId, month, year, deletedAt: null },
+      where: { studentId, month, year, category, deletedAt: null },
     });
 
-    const feeAmount = money(payload.feeAmount != null ? payload.feeAmount : fee?.feeAmount ?? student.monthlyFee);
+    const defaultField = studentDefaultFeeField(category);
+    const feeAmount = money(
+      payload.feeAmount != null ? payload.feeAmount : fee?.feeAmount ?? student[defaultField] ?? 0
+    );
     if (feeAmount < 0) throw new ApiError(400, 'Fee amount cannot be negative');
 
     if (!fee) {
-      const previousDue = await getStudentOutstanding(studentId, null, tx);
+      const previousDue = await getStudentOutstanding(studentId, null, tx, category);
       const { status, remainingDue } = feeStatusFromAmounts({
         feeAmount,
         previousDue,
@@ -337,6 +369,8 @@ export async function collectStudentFee(payload, userId) {
           studentId,
           month,
           year,
+          category,
+          title,
           feeAmount: dec(feeAmount),
           previousDue: dec(previousDue),
           discount: dec(discount),
@@ -347,12 +381,13 @@ export async function collectStudentFee(payload, userId) {
           updatedById: userId || null,
         },
       });
-    } else if (payload.discount != null || payload.feeAmount != null) {
+    } else if (payload.discount != null || payload.feeAmount != null || payload.title != null) {
       await tx.studentFeeMonth.update({
         where: { id: fee.id },
         data: {
           feeAmount: dec(feeAmount),
           discount: dec(discount),
+          ...(title != null ? { title } : {}),
           updatedById: userId || null,
         },
       });
@@ -457,12 +492,11 @@ export async function collectStudentFee(payload, userId) {
 }
 
 /**
- * Generate (or regenerate) monthly fee bills for Active students.
- * Same month/year again → clears that month’s payments and replaces the fee bill
- * (unique on student+month+year requires in-place update, not a second row).
+ * Generate (or regenerate) fee bills for Active students by category.
+ * Unique on student+month+year+category — regenerating clears that category’s payments.
  *
- * feeAmount: used for this month’s bills.
- * saveAsStudentDefault (default true when feeAmount given): also writes student.monthlyFee.
+ * feeAmount: used for this period’s bills.
+ * saveAsStudentDefault (default true when feeAmount given): also writes student default for category.
  */
 export async function generateMonthlyFees({
   month,
@@ -471,8 +505,14 @@ export async function generateMonthlyFees({
   studentIds,
   userId,
   saveAsStudentDefault,
+  category: categoryInput = 'Monthly',
+  title: titleInput,
 }) {
   const { month: m, year: y } = parseMonthYear(month, year);
+  const category = normalizeFeeCategory(categoryInput);
+  const title =
+    category === 'Other' ? String(titleInput || '').trim() || 'Other Fees' : null;
+  const defaultField = studentDefaultFeeField(category);
   const where = { status: 'Active' };
   if (Array.isArray(studentIds) && studentIds.length) {
     where.id = { in: studentIds };
@@ -483,7 +523,7 @@ export async function generateMonthlyFees({
 
   const students = await prisma.student.findMany({
     where,
-    select: { id: true, monthlyFee: true, defaultDiscount: true },
+    select: { id: true, monthlyFee: true, hostelFee: true, otherFee: true, defaultDiscount: true },
   });
   let created = 0;
   let updated = 0;
@@ -493,7 +533,7 @@ export async function generateMonthlyFees({
   const now = new Date();
 
   for (const s of students) {
-    const amount = money(hasOverride ? feeAmount : s.monthlyFee);
+    const amount = money(hasOverride ? feeAmount : s[defaultField] || 0);
     if (amount <= 0) {
       skipped += 1;
       continue;
@@ -502,16 +542,16 @@ export async function generateMonthlyFees({
     if (saveDefaults) {
       await prisma.student.update({
         where: { id: s.id },
-        data: { monthlyFee: dec(amount) },
+        data: { [defaultField]: dec(amount) },
       });
       defaultsUpdated += 1;
     }
 
     const discount = money(s.defaultDiscount);
 
-    // Include soft-deleted rows — unique(studentId, month, year) blocks a second create
+    // Include soft-deleted rows — unique(studentId, month, year, category) blocks a second create
     const existing = await prisma.studentFeeMonth.findFirst({
-      where: { studentId: s.id, month: m, year: y },
+      where: { studentId: s.id, month: m, year: y, category },
     });
 
     if (existing) {
@@ -521,7 +561,7 @@ export async function generateMonthlyFees({
       });
       paymentsCleared += payResult.count;
 
-      const previousDue = await getStudentOutstanding(s.id, existing.id);
+      const previousDue = await getStudentOutstanding(s.id, existing.id, prisma, category);
       const { status, remainingDue } = feeStatusFromAmounts({
         feeAmount: amount,
         previousDue,
@@ -532,6 +572,8 @@ export async function generateMonthlyFees({
       await prisma.studentFeeMonth.update({
         where: { id: existing.id },
         data: {
+          category,
+          title,
           feeAmount: dec(amount),
           previousDue: dec(previousDue),
           discount: dec(discount),
@@ -547,7 +589,7 @@ export async function generateMonthlyFees({
       continue;
     }
 
-    const previousDue = await getStudentOutstanding(s.id);
+    const previousDue = await getStudentOutstanding(s.id, null, prisma, category);
     const { status, remainingDue } = feeStatusFromAmounts({
       feeAmount: amount,
       previousDue,
@@ -559,6 +601,8 @@ export async function generateMonthlyFees({
         studentId: s.id,
         month: m,
         year: y,
+        category,
+        title,
         feeAmount: dec(amount),
         previousDue: dec(previousDue),
         discount: dec(discount),
@@ -575,7 +619,7 @@ export async function generateMonthlyFees({
 
   if (created + updated === 0) {
     const err = new Error(
-      'No fees generated. Enter a Monthly Fee amount, or set each student’s fee via Defaults first.'
+      `No ${feeCategoryLabel(category)} generated. Enter a fee amount, or set each student’s ${feeCategoryLabel(category)} via Defaults first.`
     );
     err.statusCode = 400;
     throw err;
@@ -590,6 +634,8 @@ export async function generateMonthlyFees({
     total: students.length,
     month: m,
     year: y,
+    category,
+    categoryLabel: feeCategoryLabel(category),
   };
 }
 
@@ -643,6 +689,7 @@ export async function listPendingFees({ search, page = 1, limit = 20 }) {
         id: r.id,
         _id: r.id,
         monthLabel: monthLabel(r.month, r.year),
+        categoryLabel: feeCategoryLabel(r.category),
         student: r.student ? { ...r.student, _id: r.student.id } : null,
       })
     ),
@@ -683,6 +730,7 @@ export async function getStudentFeeHistory(studentId, filters = {}) {
       id: m.id,
       _id: m.id,
       monthLabel: monthLabel(m.month, m.year),
+      categoryLabel: feeCategoryLabel(m.category),
       payments: m.payments.map((p) => ({ ...serializeMoney(p), id: p.id, _id: p.id })),
     })
   );
@@ -891,7 +939,18 @@ export async function listCoachPayments({
       take,
       orderBy: [{ year: 'desc' }, { month: 'desc' }],
       include: {
-        coach: { select: { id: true, coachCode: true, fullName: true, photo: true, salary: true } },
+        coach: {
+          select: {
+            id: true,
+            coachCode: true,
+            fullName: true,
+            photo: true,
+            salary: true,
+            employeeRole: true,
+            category: true,
+            designation: true,
+          },
+        },
       },
     }),
   ]);

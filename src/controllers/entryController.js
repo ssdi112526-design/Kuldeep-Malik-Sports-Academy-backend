@@ -282,6 +282,7 @@ export const getStudentById = asyncHandler(async (req, res) => {
 export const createStudent = asyncHandler(async (req, res) => {
   const files = req.files || {};
   const photoUpload = files.photo?.[0];
+  const parentPhotoUpload = files.parentPhoto?.[0];
   const aadhaarFrontUpload = files.aadhaarFront?.[0];
   const aadhaarBackUpload = files.aadhaarBack?.[0];
   const panCardUpload = files.panCard?.[0];
@@ -317,6 +318,8 @@ export const createStudent = asyncHandler(async (req, res) => {
     chest,
     age,
     category,
+    ageCategory,
+    weightCategory,
     guardianName,
     guardianRelation,
     guardianMobile,
@@ -359,6 +362,11 @@ export const createStudent = asyncHandler(async (req, res) => {
   const photo = await processEntryPhoto(photoUpload, {
     prefix: `student-${registrationNumber}`,
   });
+  const parentPhoto = parentPhotoUpload
+    ? await processEntryPhoto(parentPhotoUpload, {
+        prefix: `parent-${registrationNumber}`,
+      })
+    : null;
 
   const aadhaarFrontImage = aadhaarFrontUpload ? toPublicPath(aadhaarFrontUpload.filename, 'entry/documents') : null;
   const aadhaarBackImage = aadhaarBackUpload ? toPublicPath(aadhaarBackUpload.filename, 'entry/documents') : null;
@@ -395,6 +403,7 @@ export const createStudent = asyncHandler(async (req, res) => {
         panNumber: String(panNumber).trim(),
 
         photo,
+        parentPhoto,
         joiningDate: new Date(joiningDate),
         membershipType: membershipType || 'General',
         batch: batch || 'General',
@@ -406,6 +415,8 @@ export const createStudent = asyncHandler(async (req, res) => {
         chest: chest ? Number(chest) : 0,
         age: age ? Number(age) : 0,
         category: category || null,
+        ageCategory: ageCategory ? String(ageCategory).trim() || null : null,
+        weightCategory: weightCategory ? String(weightCategory).trim() || null : null,
 
         guardianName: guardianName || null,
         guardianRelation: guardianRelation || null,
@@ -471,6 +482,7 @@ export const updateStudent = asyncHandler(async (req, res) => {
 
   const files = req.files || {};
   const photoUpload = files.photo?.[0];
+  const parentPhotoUpload = files.parentPhoto?.[0];
   const aadhaarFrontUpload = files.aadhaarFront?.[0];
   const aadhaarBackUpload = files.aadhaarBack?.[0];
   const panCardUpload = files.panCard?.[0];
@@ -486,6 +498,14 @@ export const updateStudent = asyncHandler(async (req, res) => {
     nextPhoto = await processEntryPhoto(photoUpload, {
       prefix: `student-${student.registrationNumber}`,
       oldPhotoPath: student.photo,
+    });
+  }
+
+  let nextParentPhoto = student.parentPhoto;
+  if (parentPhotoUpload) {
+    nextParentPhoto = await processEntryPhoto(parentPhotoUpload, {
+      prefix: `parent-${student.registrationNumber}`,
+      oldPhotoPath: student.parentPhoto,
     });
   }
 
@@ -544,6 +564,7 @@ export const updateStudent = asyncHandler(async (req, res) => {
         aadhaarNumber: nextAadhaarNumber,
         panNumber: nextPanNumber,
         photo: nextPhoto,
+        parentPhoto: nextParentPhoto,
 
         joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : student.joiningDate,
         membershipType: req.body.membershipType !== undefined ? req.body.membershipType || 'General' : student.membershipType,
@@ -556,6 +577,14 @@ export const updateStudent = asyncHandler(async (req, res) => {
         chest: req.body.chest !== undefined ? Number(req.body.chest) || 0 : student.chest,
         age: req.body.age !== undefined ? Number(req.body.age) || 0 : student.age,
         category: req.body.category !== undefined ? req.body.category || null : student.category,
+        ageCategory:
+          req.body.ageCategory !== undefined
+            ? String(req.body.ageCategory || '').trim() || null
+            : student.ageCategory,
+        weightCategory:
+          req.body.weightCategory !== undefined
+            ? String(req.body.weightCategory || '').trim() || null
+            : student.weightCategory,
 
         guardianName: req.body.guardianName !== undefined ? req.body.guardianName || null : student.guardianName,
         guardianRelation:
@@ -646,6 +675,7 @@ export const deleteStudent = asyncHandler(async (req, res) => {
 
   await prisma.student.delete({ where: { id: req.params.id } });
   if (student.photo) deleteUploadedFile(student.photo);
+  if (student.parentPhoto) deleteUploadedFile(student.parentPhoto);
   if (student.qrCodePath) deleteUploadedFile(student.qrCodePath);
 
   res.json({ success: true, message: 'Student deleted' });
@@ -703,6 +733,11 @@ export const exportStudents = asyncHandler(async (req, res) => {
     status: s.status,
     membershipType: s.membershipType,
     batch: s.batch,
+    category: s.category || 0,
+    ageCategory: s.ageCategory || 0,
+    weightCategory: s.weightCategory || 0,
+    age: s.age ?? 0,
+    weightKg: s.weightKg ?? 0,
     coachName: s.coach?.fullName || 0,
     joiningDate: s.joiningDate ? new Date(s.joiningDate).toLocaleDateString('en-IN') : 0,
     mobileNumber: s.mobileNumber,
@@ -718,6 +753,11 @@ export const exportStudents = asyncHandler(async (req, res) => {
     { key: 'status', label: 'Status', width: 14 },
     { key: 'membershipType', label: 'Membership', width: 16 },
     { key: 'batch', label: 'Batch', width: 14 },
+    { key: 'category', label: 'Player Category', width: 16 },
+    { key: 'ageCategory', label: 'Age Category', width: 14 },
+    { key: 'weightCategory', label: 'Weight Category', width: 14 },
+    { key: 'age', label: 'Age', width: 8 },
+    { key: 'weightKg', label: 'Weight (kg)', width: 12 },
     { key: 'coachName', label: 'Coach', width: 20 },
     { key: 'joiningDate', label: 'Joining Date', width: 14 },
     { key: 'mobileNumber', label: 'Mobile', width: 14 },
@@ -854,10 +894,29 @@ export const getCoachById = asyncHandler(async (req, res) => {
   });
 });
 
+const EMPLOYEE_CATEGORIES = ['Coach', 'Assistant Coach', 'Warden', 'Cook', 'Cleaner', 'Physio'];
+
+function normalizeOptionalId(value) {
+  const v = String(value || '').trim();
+  return v || null;
+}
+
+function parseEmployeeCategory(value, { required = false } = {}) {
+  const v = String(value || '').trim();
+  if (!v) {
+    if (required) throw new ApiError(400, 'Category is required');
+    return null;
+  }
+  if (!EMPLOYEE_CATEGORIES.includes(v)) {
+    throw new ApiError(400, `Category must be one of: ${EMPLOYEE_CATEGORIES.join(', ')}`);
+  }
+  return v;
+}
+
 export const createCoach = asyncHandler(async (req, res) => {
   const files = req.files || {};
   const photoUpload = files.photo?.[0];
-  if (!photoUpload) throw new ApiError(400, 'Coach photo is required');
+  if (!photoUpload) throw new ApiError(400, 'Employee photo is required');
 
   const aadhaarFrontUpload = files.aadhaarFront?.[0];
   const aadhaarBackUpload = files.aadhaarBack?.[0];
@@ -869,6 +928,7 @@ export const createCoach = asyncHandler(async (req, res) => {
     mobile,
     email,
     dateOfBirth,
+    gender,
     address,
     experienceYears,
     specialization,
@@ -876,6 +936,9 @@ export const createCoach = asyncHandler(async (req, res) => {
     qualification,
     salary,
     joiningDate,
+    employeeRole,
+    role,
+    category,
     status,
     showOnWebsite,
     websiteOrder,
@@ -889,19 +952,27 @@ export const createCoach = asyncHandler(async (req, res) => {
     loginUsername,
   } = req.body;
 
-  if (!fullName || !fatherName || !mobile) throw new ApiError(400, 'Missing coach fields');
-  if (!aadhaarNumber || !panNumber) throw new ApiError(400, 'Aadhaar number and PAN number are required');
+  if (!fullName || !mobile) throw new ApiError(400, 'Employee name and mobile are required');
+  if (!dateOfBirth) throw new ApiError(400, 'Date of birth is required');
+  if (!joiningDate) throw new ApiError(400, 'Joining date is required');
+  const employeeCategory = parseEmployeeCategory(category, { required: true });
+  const nextRole = String(employeeRole || role || '').trim() || null;
+  if (!nextRole) throw new ApiError(400, 'Role is required');
+  const nextAadhaar = normalizeOptionalId(aadhaarNumber);
+  const nextPan = normalizeOptionalId(panNumber);
   if (!password || !confirmPassword) throw new ApiError(400, 'Login password and confirm password are required');
   if (password !== confirmPassword) throw new ApiError(400, 'Passwords do not match');
   if (!STRONG_PASSWORD.test(password)) {
     throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
   }
 
-  await assertUniqueAcrossTables({
-    aadhaarNumber: String(aadhaarNumber).trim(),
-    panNumber: String(panNumber).trim(),
-    mode: 'coach',
-  });
+  if (nextAadhaar || nextPan) {
+    await assertUniqueAcrossTables({
+      aadhaarNumber: nextAadhaar,
+      panNumber: nextPan,
+      mode: 'coach',
+    });
+  }
 
   const coachCode = await generateCoachCode();
   const username = String(loginUsername || coachCode).trim().toLowerCase();
@@ -937,22 +1008,25 @@ export const createCoach = asyncHandler(async (req, res) => {
         coachCode,
         photo,
         fullName: String(fullName).trim(),
-        fatherName: String(fatherName).trim(),
+        fatherName: fatherName ? String(fatherName).trim() : null,
         mobile: String(mobile).trim(),
         email: email || null,
         dateOfBirth: new Date(dateOfBirth),
+        gender: gender ? String(gender).trim() : null,
         address: address || null,
         experienceYears: experienceYears ? Number(experienceYears) : 0,
         specialization: specialization || null,
         designation: designation ? String(designation).trim() : null,
         qualification: qualification || null,
         salary: salary ? Number(salary) : 0,
-        joiningDate: joiningDate ? new Date(joiningDate) : null,
+        joiningDate: new Date(joiningDate),
+        employeeRole: nextRole,
+        category: employeeCategory,
         status: status || 'Active',
         showOnWebsite: parseBool(showOnWebsite, false),
         websiteOrder: parseOrder(websiteOrder, 0),
-        aadhaarNumber: String(aadhaarNumber).trim(),
-        panNumber: String(panNumber).trim(),
+        aadhaarNumber: nextAadhaar,
+        panNumber: nextPan,
         achievements: achievements || null,
         biography: biography || null,
         socialLinks: socialLinks ? JSON.parse(socialLinks) : null,
@@ -994,13 +1068,13 @@ export const createCoach = asyncHandler(async (req, res) => {
       coach: withId(created),
       login: { username, email: userEmail },
     },
-    message: 'Coach created with login credentials',
+    message: 'Employee created with login credentials',
   });
 });
 
 export const updateCoach = asyncHandler(async (req, res) => {
   const coach = await prisma.coach.findUnique({ where: { id: req.params.id } });
-  if (!coach) throw new ApiError(404, 'Coach not found');
+  if (!coach) throw new ApiError(404, 'Employee not found');
 
   const files = req.files || {};
   const photoUpload = files.photo?.[0];
@@ -1009,10 +1083,33 @@ export const updateCoach = asyncHandler(async (req, res) => {
   const panCardUpload = files.panCard?.[0];
   const certificates = files.certificates || [];
 
-  const nextAadhaarNumber = req.body.aadhaarNumber ? String(req.body.aadhaarNumber).trim() : coach.aadhaarNumber;
-  const nextPanNumber = req.body.panNumber ? String(req.body.panNumber).trim() : coach.panNumber;
+  const nextAadhaarNumber =
+    req.body.aadhaarNumber !== undefined
+      ? normalizeOptionalId(req.body.aadhaarNumber)
+      : coach.aadhaarNumber;
+  const nextPanNumber =
+    req.body.panNumber !== undefined ? normalizeOptionalId(req.body.panNumber) : coach.panNumber;
   if (nextAadhaarNumber !== coach.aadhaarNumber || nextPanNumber !== coach.panNumber) {
-    await assertUniqueAcrossTables({ aadhaarNumber: nextAadhaarNumber, panNumber: nextPanNumber, mode: 'coach' });
+    if (nextAadhaarNumber || nextPanNumber) {
+      await assertUniqueAcrossTables({
+        aadhaarNumber: nextAadhaarNumber,
+        panNumber: nextPanNumber,
+        mode: 'coach',
+      });
+    }
+  }
+
+  let nextCategory = coach.category;
+  if (req.body.category !== undefined) {
+    nextCategory = parseEmployeeCategory(req.body.category, { required: true });
+  }
+  let nextRole = coach.employeeRole;
+  if (req.body.employeeRole !== undefined || req.body.role !== undefined) {
+    nextRole = String(req.body.employeeRole || req.body.role || '').trim() || null;
+    if (!nextRole) throw new ApiError(400, 'Role is required');
+  }
+  if (req.body.joiningDate !== undefined && !String(req.body.joiningDate || '').trim()) {
+    throw new ApiError(400, 'Joining date is required');
   }
 
   let nextPhoto = coach.photo;
@@ -1056,10 +1153,21 @@ export const updateCoach = asyncHandler(async (req, res) => {
         coachCode: coach.coachCode, // keep stable
         photo: nextPhoto,
         fullName: req.body.fullName !== undefined ? String(req.body.fullName).trim() : coach.fullName,
-        fatherName: req.body.fatherName !== undefined ? String(req.body.fatherName).trim() : coach.fatherName,
+        fatherName:
+          req.body.fatherName !== undefined
+            ? req.body.fatherName
+              ? String(req.body.fatherName).trim()
+              : null
+            : coach.fatherName,
         mobile: req.body.mobile !== undefined ? String(req.body.mobile).trim() : coach.mobile,
         email: req.body.email !== undefined ? req.body.email || null : coach.email,
         dateOfBirth: req.body.dateOfBirth ? new Date(req.body.dateOfBirth) : coach.dateOfBirth,
+        gender:
+          req.body.gender !== undefined
+            ? req.body.gender
+              ? String(req.body.gender).trim()
+              : null
+            : coach.gender,
         address: req.body.address !== undefined ? req.body.address || null : coach.address,
         experienceYears: req.body.experienceYears !== undefined ? Number(req.body.experienceYears) || 0 : coach.experienceYears,
         specialization: req.body.specialization !== undefined ? req.body.specialization || null : coach.specialization,
@@ -1071,7 +1179,14 @@ export const updateCoach = asyncHandler(async (req, res) => {
             : coach.designation,
         qualification: req.body.qualification !== undefined ? req.body.qualification || null : coach.qualification,
         salary: req.body.salary !== undefined ? Number(req.body.salary) || 0 : coach.salary,
-        joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : coach.joiningDate,
+        joiningDate:
+          req.body.joiningDate !== undefined
+            ? req.body.joiningDate
+              ? new Date(req.body.joiningDate)
+              : null
+            : coach.joiningDate,
+        employeeRole: nextRole,
+        category: nextCategory,
         status: req.body.status !== undefined ? req.body.status : coach.status,
         showOnWebsite:
           req.body.showOnWebsite !== undefined ? parseBool(req.body.showOnWebsite, false) : coach.showOnWebsite,
@@ -1383,6 +1498,27 @@ export const exportCoaches = asyncHandler(async (req, res) => {
 // ---------------------------
 // Equipment / Tools
 // ---------------------------
+
+/** Public website equipment (active only, safe fields) */
+export const listEquipmentPublic = asyncHandler(async (_req, res) => {
+  const items = await prisma.equipment.findMany({
+    where: { isActive: true },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      category: true,
+      image: true,
+      order: true,
+      icon: true,
+    },
+    orderBy: [{ order: 'asc' }, { title: 'asc' }],
+  });
+  res.json({
+    success: true,
+    data: { equipment: withIds(items) },
+  });
+});
 
 export const listEquipmentAdmin = asyncHandler(async (req, res) => {
   const page = parsePage(req.query.page, 1);

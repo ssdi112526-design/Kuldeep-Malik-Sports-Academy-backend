@@ -5,7 +5,11 @@
  */
 import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
-import { attendanceDateFromInstant, dateKey } from '../utils/attendanceDate.js';
+import {
+  attendanceStatusLabel,
+  normalizeAttendanceStatus,
+} from '../constants/attendanceStatus.js';
+import { attendanceDateFromInstant, dateKey, parseDateOnly } from '../utils/attendanceDate.js';
 
 export const ATTENDANCE_METHODS = ['QR', 'MANUAL', 'BIOMETRIC'];
 
@@ -165,6 +169,74 @@ export async function markStudentPresent({
     }
     throw e;
   }
+}
+
+/**
+ * Admin upsert of player attendance status for a calendar date (IST date-only).
+ * Creates or updates the unique studentId+date row.
+ */
+export async function upsertStudentAttendanceStatus({
+  studentId,
+  date,
+  status,
+  markedAt = new Date(),
+  method = 'MANUAL',
+  dataSource = 'live',
+} = {}) {
+  const statusKey = normalizeAttendanceStatus(status);
+  if (!statusKey) {
+    throw new ApiError(
+      400,
+      'Invalid attendance status. Use Present, Absent, Leave, Medical Leave, or Competition Leave.'
+    );
+  }
+
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) throw new ApiError(404, 'Player not found');
+
+  let day;
+  try {
+    day = typeof date === 'string' ? parseDateOnly(date) : attendanceDateFromInstant(date || markedAt);
+  } catch {
+    throw new ApiError(400, 'Invalid date. Use YYYY-MM-DD');
+  }
+
+  const at = new Date(markedAt);
+  const methodNorm = normalizeMethod(method, 'MANUAL');
+
+  const record = await prisma.attendance.upsert({
+    where: {
+      studentId_date: { studentId: student.id, date: day },
+    },
+    create: {
+      studentId: student.id,
+      registrationId: student.registrationNumber,
+      date: day,
+      markedAt: at,
+      status: statusKey,
+      source: dataSource === 'demo' ? 'demo' : 'live',
+      method: methodNorm,
+    },
+    update: {
+      status: statusKey,
+      markedAt: at,
+      method: methodNorm,
+      source: dataSource === 'demo' ? 'demo' : 'live',
+    },
+  });
+
+  return {
+    record,
+    date: dateKey(day),
+    status: statusKey,
+    statusLabel: attendanceStatusLabel(statusKey),
+    person: {
+      type: 'student',
+      id: student.id,
+      name: student.fullName,
+      code: student.registrationNumber,
+    },
+  };
 }
 
 export async function markCoachPresentRecord({

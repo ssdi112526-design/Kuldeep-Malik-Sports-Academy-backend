@@ -46,9 +46,11 @@ export function serializeUser(user, permissions = []) {
         ? 'student'
         : user.role === 'coach'
           ? 'coach_portal'
-          : user.role === 'user'
-            ? 'staff'
-            : user.role);
+          : user.role === 'parent'
+            ? 'parent'
+            : user.role === 'user'
+              ? 'staff'
+              : user.role);
 
   const isStudent = user.role === 'student' || roleSlug === 'student' || Boolean(user.studentId);
   // Portal coach (linked Coach entity) — not the admin-panel staff role slug "coach"
@@ -56,7 +58,11 @@ export function serializeUser(user, permissions = []) {
     Boolean(user.coachId) ||
     user.role === 'coach' ||
     roleSlug === 'coach_portal';
-  const isPortalUser = isStudent || isCoach;
+  const isParent =
+    user.role === 'parent' ||
+    roleSlug === 'parent' ||
+    Boolean(user.parentProfile);
+  const isPortalUser = isStudent || isCoach || isParent;
 
   const student = user.student
     ? {
@@ -92,13 +98,26 @@ export function serializeUser(user, permissions = []) {
   let accountType = 'staff';
   if (isStudent) accountType = 'student';
   else if (isCoach) accountType = 'coach';
+  else if (isParent) accountType = 'parent';
 
   let roleName = roleRef?.name || 'User';
   if (!roleRef) {
     if (rest.role === 'admin') roleName = 'Super Admin';
     else if (rest.role === 'student') roleName = 'Student';
     else if (rest.role === 'coach') roleName = 'Coach';
+    else if (rest.role === 'parent') roleName = 'Parent';
   }
+
+  const parentProfile = user.parentProfile
+    ? {
+        id: user.parentProfile.id,
+        fullName: user.parentProfile.fullName,
+        phone: user.parentProfile.phone,
+        email: user.parentProfile.email,
+        relation: user.parentProfile.relation,
+        photo: user.parentProfile.photo || null,
+      }
+    : null;
 
   return {
     id: rest.id,
@@ -117,9 +136,11 @@ export function serializeUser(user, permissions = []) {
     coachId: rest.coachId || null,
     student,
     coach,
+    parentProfile,
     accountType,
     isStudent,
     isCoach,
+    isParent,
     isActive: rest.isActive,
     lastLoginAt: rest.lastLoginAt || null,
     createdAt: rest.createdAt,
@@ -137,7 +158,15 @@ export function serializeUser(user, permissions = []) {
 export async function getUserPermissions(user) {
   if (!user) return [];
 
-  if (user.role === 'student' || user.studentId || user.role === 'coach' || user.coachId) {
+  // Portal accounts never receive admin permission keys (defense in depth)
+  if (
+    user.role === 'student' ||
+    user.studentId ||
+    user.role === 'coach' ||
+    user.coachId ||
+    user.role === 'parent' ||
+    user.parentProfile
+  ) {
     return [];
   }
 
@@ -198,6 +227,16 @@ export async function loadUserWithRole(userId) {
           joiningDate: true,
           experienceYears: true,
           qualification: true,
+        },
+      },
+      parentProfile: {
+        select: {
+          id: true,
+          fullName: true,
+          phone: true,
+          email: true,
+          relation: true,
+          photo: true,
         },
       },
     },

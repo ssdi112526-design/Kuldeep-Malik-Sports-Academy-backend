@@ -1,14 +1,13 @@
 import { Router } from 'express';
-import { protect, requirePermission, requireAnyPermission } from '../middleware/auth.js';
+import { protect, requirePermission, requireAnyPermission, requireAdminAccess } from '../middleware/auth.js';
 import validate from '../middleware/validate.js';
 import {
   uploadSingle,
   uploadMultiple,
   uploadVideoMedia,
   uploadSiteSettings,
-  handleMulterError,
+  withMediaBlobBackup,
 } from '../middleware/upload.js';
-import { rememberMulterUploads } from '../utils/mediaBlobStore.js';
 import { modulePermissionKeys } from '../constants/permissions.js';
 import {
   listProgramsPublic,
@@ -38,6 +37,15 @@ import {
   facilityCreateValidation,
   facilityUpdateValidation,
   facilityIdValidation,
+  listAthletesPublic,
+  listAthletesAdmin,
+  createAthlete,
+  updateAthlete,
+  deleteAthlete,
+  athleteListValidation,
+  athleteCreateValidation,
+  athleteUpdateValidation,
+  athleteIdValidation,
   listFeaturesPublic,
   listFeaturesAdmin,
   createFeature,
@@ -79,31 +87,24 @@ import {
 
 const router = Router();
 
-const runUpload = (uploader) => (req, res, next) => {
-  uploader(req, res, async (err) => {
-    if (err) return handleMulterError(err, req, res, next);
-    try {
-      await rememberMulterUploads(req);
-    } catch (persistErr) {
-      console.warn('[media-blob] persist after CMS upload failed:', persistErr.message);
-    }
-    next();
-  });
-};
+const runUpload = (uploader) => withMediaBlobBackup(uploader);
 
-const programsRead = [protect, requireAnyPermission(...modulePermissionKeys('programs'))];
-const galleryRead = [protect, requireAnyPermission(...modulePermissionKeys('gallery'))];
-const facilitiesRead = [protect, requireAnyPermission(...modulePermissionKeys('facilities'))];
-const featuresRead = [protect, requireAnyPermission(...modulePermissionKeys('features'))];
-const membershipRead = [protect, requireAnyPermission(...modulePermissionKeys('membership'))];
-const websiteRead = [protect, requireAnyPermission(...modulePermissionKeys('website_content'))];
-const videosRead = [protect, requireAnyPermission(...modulePermissionKeys('videos'))];
+const programsRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('programs'))];
+const galleryRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('gallery'))];
+const athletesRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('athletes'))];
+const facilitiesRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('facilities'))];
+const featuresRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('features'))];
+const membershipRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('membership'))];
+const websiteRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('website_content'))];
+const videosRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('videos'))];
 const dashboardRead = [
   protect,
+  requireAdminAccess,
   requireAnyPermission(
     ...modulePermissionKeys('dashboard'),
     ...modulePermissionKeys('programs'),
     ...modulePermissionKeys('gallery'),
+    ...modulePermissionKeys('athletes'),
     ...modulePermissionKeys('facilities'),
     ...modulePermissionKeys('features'),
     ...modulePermissionKeys('membership'),
@@ -115,6 +116,7 @@ const dashboardRead = [
 /* Public */
 router.get('/programs', listProgramsPublic);
 router.get('/gallery', listGalleryPublic);
+router.get('/athletes', listAthletesPublic);
 router.get('/facilities', listFacilitiesPublic);
 router.get('/features', listFeaturesPublic);
 router.get('/membership-plans', listMembershipPlansPublic);
@@ -131,6 +133,7 @@ router.get('/admin/programs', ...programsRead, ...programListValidation, validat
 router.post(
   '/admin/programs',
   protect,
+  requireAdminAccess,
   requirePermission('programs.create'),
   runUpload(uploadSingle),
   ...programCreateValidation,
@@ -140,6 +143,7 @@ router.post(
 router.put(
   '/admin/programs/:id',
   protect,
+  requireAdminAccess,
   requirePermission('programs.edit'),
   runUpload(uploadSingle),
   ...programUpdateValidation,
@@ -149,6 +153,7 @@ router.put(
 router.delete(
   '/admin/programs/:id',
   protect,
+  requireAdminAccess,
   requirePermission('programs.delete'),
   ...programIdValidation,
   validate,
@@ -160,6 +165,7 @@ router.get('/admin/gallery', ...galleryRead, ...galleryListValidation, validate,
 router.post(
   '/admin/gallery',
   protect,
+  requireAdminAccess,
   requirePermission('gallery.create'),
   runUpload(uploadMultiple),
   ...galleryCreateValidation,
@@ -169,6 +175,7 @@ router.post(
 router.put(
   '/admin/gallery/:id',
   protect,
+  requireAdminAccess,
   requirePermission('gallery.edit'),
   runUpload(uploadSingle),
   ...galleryUpdateValidation,
@@ -178,10 +185,43 @@ router.put(
 router.delete(
   '/admin/gallery/:id',
   protect,
+  requireAdminAccess,
   requirePermission('gallery.delete'),
   ...galleryIdValidation,
   validate,
   deleteGalleryItem
+);
+
+/* Admin Athletes (Meet Our Wrestlers) */
+router.get('/admin/athletes', ...athletesRead, ...athleteListValidation, validate, listAthletesAdmin);
+router.post(
+  '/admin/athletes',
+  protect,
+  requireAdminAccess,
+  requirePermission('athletes.create'),
+  runUpload(uploadSingle),
+  ...athleteCreateValidation,
+  validate,
+  createAthlete
+);
+router.put(
+  '/admin/athletes/:id',
+  protect,
+  requireAdminAccess,
+  requirePermission('athletes.edit'),
+  runUpload(uploadSingle),
+  ...athleteUpdateValidation,
+  validate,
+  updateAthlete
+);
+router.delete(
+  '/admin/athletes/:id',
+  protect,
+  requireAdminAccess,
+  requirePermission('athletes.delete'),
+  ...athleteIdValidation,
+  validate,
+  deleteAthlete
 );
 
 /* Admin Facilities */
@@ -189,6 +229,7 @@ router.get('/admin/facilities', ...facilitiesRead, ...facilityListValidation, va
 router.post(
   '/admin/facilities',
   protect,
+  requireAdminAccess,
   requirePermission('facilities.create'),
   runUpload(uploadSingle),
   ...facilityCreateValidation,
@@ -198,6 +239,7 @@ router.post(
 router.put(
   '/admin/facilities/:id',
   protect,
+  requireAdminAccess,
   requirePermission('facilities.edit'),
   runUpload(uploadSingle),
   ...facilityUpdateValidation,
@@ -207,6 +249,7 @@ router.put(
 router.delete(
   '/admin/facilities/:id',
   protect,
+  requireAdminAccess,
   requirePermission('facilities.delete'),
   ...facilityIdValidation,
   validate,
@@ -218,6 +261,7 @@ router.get('/admin/features', ...featuresRead, ...featureListValidation, validat
 router.post(
   '/admin/features',
   protect,
+  requireAdminAccess,
   requirePermission('features.create'),
   runUpload(uploadSingle),
   ...featureCreateValidation,
@@ -227,6 +271,7 @@ router.post(
 router.put(
   '/admin/features/:id',
   protect,
+  requireAdminAccess,
   requirePermission('features.edit'),
   runUpload(uploadSingle),
   ...featureUpdateValidation,
@@ -236,6 +281,7 @@ router.put(
 router.delete(
   '/admin/features/:id',
   protect,
+  requireAdminAccess,
   requirePermission('features.delete'),
   ...featureIdValidation,
   validate,
@@ -253,6 +299,7 @@ router.get(
 router.post(
   '/admin/membership-plans',
   protect,
+  requireAdminAccess,
   requirePermission('membership.create'),
   runUpload(uploadSingle),
   ...membershipCreateValidation,
@@ -262,6 +309,7 @@ router.post(
 router.put(
   '/admin/membership-plans/:id',
   protect,
+  requireAdminAccess,
   requirePermission('membership.edit'),
   runUpload(uploadSingle),
   ...membershipUpdateValidation,
@@ -271,6 +319,7 @@ router.put(
 router.delete(
   '/admin/membership-plans/:id',
   protect,
+  requireAdminAccess,
   requirePermission('membership.delete'),
   ...membershipIdValidation,
   validate,
@@ -282,6 +331,7 @@ router.get('/admin/site-settings', ...websiteRead, getSiteSettingsAdmin);
 router.put(
   '/admin/site-settings',
   protect,
+  requireAdminAccess,
   requirePermission('website_content.edit'),
   runUpload(uploadSiteSettings),
   ...siteSettingUpdateValidation,
@@ -294,6 +344,7 @@ router.get('/admin/videos', ...videosRead, ...videoListValidation, validate, lis
 router.post(
   '/admin/videos',
   protect,
+  requireAdminAccess,
   requirePermission('videos.create'),
   runUpload(uploadVideoMedia),
   ...videoCreateValidation,
@@ -303,6 +354,7 @@ router.post(
 router.put(
   '/admin/videos/:id',
   protect,
+  requireAdminAccess,
   requirePermission('videos.edit'),
   runUpload(uploadVideoMedia),
   ...videoUpdateValidation,
@@ -312,6 +364,7 @@ router.put(
 router.delete(
   '/admin/videos/:id',
   protect,
+  requireAdminAccess,
   requirePermission('videos.delete'),
   ...videoIdValidation,
   validate,

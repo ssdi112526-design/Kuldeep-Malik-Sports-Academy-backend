@@ -14,6 +14,7 @@ import {
   listDailyRoster,
   getStudentHistory,
   scanAttendance,
+  markAttendanceStatus,
   getMyAttendance,
   getMyStudentProfile,
 } from '../controllers/attendanceController.js';
@@ -37,6 +38,7 @@ router.get('/admin/attendance/qr/active', ...adminView, getActiveAttendanceQr);
 router.post('/admin/attendance/qr/generate', ...adminCreate, generateAttendanceQr);
 router.post('/admin/attendance/qr/close', ...adminEdit, closeAttendanceQr);
 router.post('/admin/attendance/qr/:id/close', ...adminEdit, closeAttendanceQr);
+router.post('/admin/attendance/mark', ...adminEdit, markAttendanceStatus);
 router.post('/admin/attendance/export', ...adminExport, exportAttendanceExcel);
 
 router.get('/student/profile', protect, requireStudent, getMyStudentProfile);

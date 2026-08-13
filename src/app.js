@@ -18,9 +18,14 @@ import coachPortalRoutes from './routes/coachPortalRoutes.js';
 import biometricRoutes from './routes/biometricRoutes.js';
 import attendanceSettingsRoutes from './routes/attendanceSettingsRoutes.js';
 import financeRoutes from './routes/financeRoutes.js';
+import academyRecordsRoutes from './routes/academyRecordsRoutes.js';
+import reportsRoutes from './routes/reportsRoutes.js';
+import sponsorshipRoutes from './routes/sponsorshipRoutes.js';
+import mediaRestoreRoutes from './routes/mediaRestoreRoutes.js';
 import indexRoutes from './routes/index.js';
 import errorHandler, { notFound } from './middleware/errorHandler.js';
 import { UPLOADS_DIR } from './middleware/upload.js';
+import { blockPrivateUploads, restoreMissingUploadOnDemand } from './middleware/uploadsServe.js';
 
 const app = express();
 
@@ -82,6 +87,11 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+/** Private docs: never via public /uploads — use authenticated download APIs. */
+app.use('/uploads', blockPrivateUploads);
+/** Render wipe recovery: restore missing public files from Postgres, then serve disk. */
+app.use('/uploads', restoreMissingUploadOnDemand);
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 app.use('/api', indexRoutes);
@@ -99,6 +109,10 @@ app.use('/api', coachPortalRoutes);
 app.use('/api', biometricRoutes);
 app.use('/api', attendanceSettingsRoutes);
 app.use('/api', financeRoutes);
+app.use('/api', academyRecordsRoutes);
+app.use('/api', reportsRoutes);
+app.use('/api', sponsorshipRoutes);
+app.use('/api', mediaRestoreRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

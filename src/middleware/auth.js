@@ -114,20 +114,34 @@ export const requireAnyPermission = (...keys) => (req, res, next) => {
   next();
 };
 
-/** Must be able to open admin panel — students and portal coaches always rejected */
+/** Must be able to open admin panel — portal users always rejected */
 export const requireAdminAccess = (req, res, next) => {
   if (
     req.user?.isStudent ||
     req.user?.isCoach ||
+    req.user?.isParent ||
     req.user?.role === 'student' ||
     req.user?.role === 'coach' ||
+    req.user?.role === 'parent' ||
     req.user?.accountType === 'student' ||
-    req.user?.accountType === 'coach'
+    req.user?.accountType === 'coach' ||
+    req.user?.accountType === 'parent'
   ) {
     return next(new ApiError(403, "You don't have permission to access the admin panel."));
   }
   if (!req.user?.canAccessAdmin && !req.user?.isSuperAdmin && req.user?.role !== 'admin') {
     return next(new ApiError(403, "You don't have permission to access the admin panel."));
+  }
+  next();
+};
+
+/** Parent portal only */
+export const requireParent = (req, res, next) => {
+  if (!req.user) {
+    return next(new ApiError(403, 'You do not have permission to perform this action.'));
+  }
+  if (!req.user.isParent && req.user.role !== 'parent' && req.user.accountType !== 'parent') {
+    return next(new ApiError(403, 'Parent access only.'));
   }
   next();
 };

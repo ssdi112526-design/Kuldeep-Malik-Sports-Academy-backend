@@ -119,7 +119,7 @@ export async function toAttendanceReportXlsx({ dailyRows, summaryRows, title = '
     { key: 'batch', label: 'Batch', width: 14 },
     { key: 'membershipType', label: 'Membership', width: 14 },
     { key: 'dateDisplay', label: 'Date', width: 12 },
-    { key: 'status', label: 'Status', width: 10 },
+    { key: 'status', label: 'Status', width: 18 },
     { key: 'checkIn', label: 'Check-in', width: 12 },
     { key: 'checkOut', label: 'Check-out', width: 12 },
     { key: 'sourceLabel', label: 'Source', width: 12 },
@@ -147,6 +147,9 @@ export async function toAttendanceReportXlsx({ dailyRows, summaryRows, title = '
     { key: 'trainingDays', label: 'Total Days', width: 12 },
     { key: 'present', label: 'Present', width: 10 },
     { key: 'absent', label: 'Absent', width: 10 },
+    { key: 'leave', label: 'Leave', width: 10 },
+    { key: 'medicalLeave', label: 'Medical Leave', width: 14 },
+    { key: 'competitionLeave', label: 'Competition Leave', width: 16 },
     { key: 'attendanceRate', label: 'Attendance %', width: 14 },
   ];
   const summary = workbook.addWorksheet('Student Summary');
@@ -184,8 +187,16 @@ function styleHeader(sheet) {
 function colorStatusColumn(sheet, key) {
   for (let i = 2; i <= sheet.rowCount; i += 1) {
     const cell = sheet.getRow(i).getCell(key);
-    const val = String(cell.value || '').toLowerCase();
+    const val = String(cell.value || '')
+      .toLowerCase()
+      .replace(/\s+/g, '_');
     if (val === 'present') cell.font = { color: { argb: 'FF067647' }, bold: true };
-    if (val === 'absent') cell.font = { color: { argb: 'FFB42318' }, bold: true };
+    else if (val === 'absent') cell.font = { color: { argb: 'FFB42318' }, bold: true };
+    else if (val === 'leave') cell.font = { color: { argb: 'FFB54708' }, bold: true };
+    else if (val === 'medical_leave' || val === 'medicalleave') {
+      cell.font = { color: { argb: 'FF6941C6' }, bold: true };
+    } else if (val === 'competition_leave' || val === 'competitionleave') {
+      cell.font = { color: { argb: 'FFC4320A' }, bold: true };
+    }
   }
 }

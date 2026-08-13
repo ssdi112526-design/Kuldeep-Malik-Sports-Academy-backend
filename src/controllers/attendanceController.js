@@ -24,6 +24,11 @@ import {
 } from '../services/attendanceCalc.js';
 import { assertQrGeofence } from '../services/geofenceService.js';
 import { encodeAttendanceQrContent } from '../utils/attendanceQrUrl.js';
+import {
+  attendanceStatusLabel,
+  normalizeAttendanceStatus,
+} from '../constants/attendanceStatus.js';
+import { upsertStudentAttendanceStatus } from '../services/attendanceMarkService.js';
 
 /** One-time QR lifetime in seconds (default 60). */
 const QR_TTL_SECONDS = Math.min(
@@ -64,7 +69,8 @@ function buildAttendanceWhere(input = {}) {
   if (input.registrationId) {
     where.registrationId = { contains: String(input.registrationId).trim(), mode: 'insensitive' };
   }
-  if (input.status === 'present') where.status = 'present';
+  const statusKey = normalizeAttendanceStatus(input.status);
+  if (statusKey) where.status = statusKey;
   return { where, period };
 }
 
@@ -405,11 +411,12 @@ export const listAttendanceRecords = asyncHandler(async (req, res) => {
         period: matrix.period,
         summary: matrix.summary,
         records: paged.rows.map((r) => ({
-          id: `${r.studentId}_${r.date}`,
+          id: r.id || `${r.studentId}_${r.date}`,
+          recordId: r.id || null,
           date: r.date,
           markedAt: r.markedAt,
-          status: r.status.toLowerCase() === 'present' ? 'present' : 'absent',
-          statusLabel: r.status,
+          status: r.statusKey || normalizeAttendanceStatus(r.status) || 'absent',
+          statusLabel: r.statusLabel || attendanceStatusLabel(r.status) || r.status,
           registrationId: r.registrationId,
           checkIn: r.checkIn,
           checkOut: r.checkOut,
@@ -474,7 +481,7 @@ export const listAttendanceRecords = asyncHandler(async (req, res) => {
           date: dateKey(r.date),
           markedAt: r.markedAt,
           status: r.status,
-          statusLabel: 'Present',
+          statusLabel: attendanceStatusLabel(r.status),
           registrationId: r.registrationId,
           sessionCode: r.session?.sessionCode,
           attendanceSessionId: r.attendanceSessionId,
@@ -525,6 +532,12 @@ export const getStudentAttendanceSummary = asyncHandler(async (req, res) => {
     presentDays: s.presentDays,
     absent: s.absentDays,
     absentDays: s.absentDays,
+    leave: s.leaveDays,
+    leaveDays: s.leaveDays,
+    medicalLeave: s.medicalLeaveDays,
+    medicalLeaveDays: s.medicalLeaveDays,
+    competitionLeave: s.competitionLeaveDays,
+    competitionLeaveDays: s.competitionLeaveDays,
     attendanceRate: s.attendancePercentage,
     attendancePercentage: s.attendancePercentage,
   }));
@@ -574,6 +587,9 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
         trainingDays: r.trainingDays,
         present: r.presentDays,
         absent: r.absentDays,
+        leave: r.leaveDays,
+        medicalLeave: r.medicalLeaveDays,
+        competitionLeave: r.competitionLeaveDays,
         attendanceRate: `${r.attendancePercentage}%`,
       }))
       .sort((a, b) => a.studentName.localeCompare(b.studentName))
@@ -587,6 +603,9 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
       { key: 'trainingDays', label: 'Total Training Days', width: 14 },
       { key: 'present', label: 'Present', width: 10 },
       { key: 'absent', label: 'Absent', width: 10 },
+      { key: 'leave', label: 'Leave', width: 10 },
+      { key: 'medicalLeave', label: 'Medical Leave', width: 14 },
+      { key: 'competitionLeave', label: 'Competition Leave', width: 16 },
       { key: 'attendanceRate', label: 'Attendance %', width: 14 },
     ];
     const buffer = await toXlsxBuffer(rows, columns, { sheetName: 'Student Summary', colorStatus: false });
@@ -627,6 +646,9 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
         trainingDays: r.trainingDays,
         present: r.presentDays,
         absent: r.absentDays,
+        leave: r.leaveDays,
+        medicalLeave: r.medicalLeaveDays,
+        competitionLeave: r.competitionLeaveDays,
         attendanceRate: `${r.attendancePercentage}%`,
       }))
       .sort((a, b) => a.studentName.localeCompare(b.studentName))
@@ -680,7 +702,7 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
     studentName: r.student?.fullName || 0,
     fatherName: r.student?.fatherName || 0,
     mobileNumber: r.student?.mobileNumber || '',
-    status: 'Present',
+    status: attendanceStatusLabel(r.status),
     sessionCode: r.session?.sessionCode || '',
   }));
 
@@ -962,55 +984,86 @@ export const scanAttendance = asyncHandler(async (req, res) => {
   });
 });
 
+export const markAttendanceStatus = asyncHandler(async (req, res) => {
+  const studentId = req.body.studentId || req.body.playerId;
+  const date = req.body.date;
+  const status = req.body.status;
+  if (!studentId) throw new ApiError(400, 'studentId is required');
+  if (!date) throw new ApiError(400, 'date is required (YYYY-MM-DD)');
+  if (!status) throw new ApiError(400, 'status is required');
+
+  const result = await upsertStudentAttendanceStatus({
+    studentId,
+    date,
+    status,
+    markedAt: req.body.markedAt ? new Date(req.body.markedAt) : new Date(),
+    method: 'MANUAL',
+  });
+  await refreshStudentAttendanceCounters(studentId);
+
+  await writeAuditLog({
+    userId: req.user.id,
+    action: 'attendance_mark_status',
+    entity: 'attendance',
+    entityId: result.record.id,
+    details: { studentId, date: result.date, status: result.status },
+    req,
+  });
+
+  res.json({
+    success: true,
+    message: `Attendance marked as ${result.statusLabel}`,
+    data: {
+      record: withId(result.record),
+      date: result.date,
+      status: result.status,
+      statusLabel: result.statusLabel,
+      student: result.person,
+    },
+  });
+});
+
 export const getMyAttendance = asyncHandler(async (req, res) => {
   const studentId = req.user.studentId;
   const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) throw new ApiError(404, 'Student not found');
 
-  const [calc, records] = await Promise.all([
+  const periodInput = Object.keys(req.query || {}).length ? req.query : { period: 'month' };
+  const [calcMonth, calcAll, history] = await Promise.all([
+    calculateStudentAttendance(studentId, periodInput),
     calculateStudentAttendance(studentId, { period: 'all' }),
-    prisma.attendance.findMany({
-      where: { studentId },
-      orderBy: [{ date: 'desc' }, { markedAt: 'desc' }],
-      take: 200,
-      include: { session: { select: { sessionCode: true } } },
-    }),
+    getStudentAttendanceHistory(studentId, periodInput),
   ]);
 
-  // Deduplicate display rows by date (keep earliest scan of the day for display consistency)
-  const seenDates = new Set();
-  const uniqueRecords = [];
-  for (const r of records) {
-    const key = dateKey(r.date);
-    if (seenDates.has(key)) continue;
-    seenDates.add(key);
-    uniqueRecords.push(r);
-  }
-
+  const calc = calcMonth || calcAll;
   res.json({
     success: true,
     data: {
       summary: {
         present: calc?.presentDays || 0,
         absent: calc?.absentDays || 0,
+        leave: calc?.leaveDays || 0,
+        medicalLeave: calc?.medicalLeaveDays || 0,
+        competitionLeave: calc?.competitionLeaveDays || 0,
         totalDays: calc?.trainingDays || 0,
         trainingDays: calc?.trainingDays || 0,
         presentDays: calc?.presentDays || 0,
         absentDays: calc?.absentDays || 0,
+        leaveDays: calc?.leaveDays || 0,
+        medicalLeaveDays: calc?.medicalLeaveDays || 0,
+        competitionLeaveDays: calc?.competitionLeaveDays || 0,
         attendanceRate: calc?.attendancePercentage || 0,
         attendancePercentage: calc?.attendancePercentage || 0,
+        allTimePercentage: calcAll?.attendancePercentage || 0,
       },
-      records: uniqueRecords.map((r) => ({
-        id: r.id,
-        date: dateKey(r.date),
-        time: new Intl.DateTimeFormat('en-IN', {
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true,
-          timeZone: 'Asia/Kolkata',
-        }).format(new Date(r.markedAt)),
-        status: 'Present',
-        sessionCode: r.session?.sessionCode,
+      period: history?.period || null,
+      records: (history?.history || []).map((r) => ({
+        id: r.id || `${r.studentId}_${r.date}`,
+        date: r.date,
+        time: r.checkIn || '',
+        status: r.statusKey || normalizeAttendanceStatus(r.status) || 'absent',
+        statusLabel: r.statusLabel || attendanceStatusLabel(r.status) || r.status,
+        sessionCode: r.sessionCode || null,
       })),
     },
   });
@@ -1024,5 +1077,7 @@ export const getMyStudentProfile = asyncHandler(async (req, res) => {
     },
   });
   if (!student) throw new ApiError(404, 'Student not found');
-  res.json({ success: true, data: { student: withId(student) } });
+  // Never expose internal admin notes on the player portal
+  const { adminNotes, ...safe } = student;
+  res.json({ success: true, data: { student: withId(safe) } });
 });
