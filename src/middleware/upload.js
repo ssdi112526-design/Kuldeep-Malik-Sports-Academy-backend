@@ -74,11 +74,26 @@ function mediaFilter(_req, file, cb) {
   return cb(new ApiError(400, 'Unexpected upload field'));
 }
 
-export const uploadSingle = multer({
+const imageFieldsUpload = multer({
   storage: imageStorage,
   fileFilter: imageFilter,
   limits: { fileSize: MAX_IMAGE },
-}).single('image');
+}).fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'photo', maxCount: 1 },
+  { name: 'file', maxCount: 1 },
+]);
+
+/** Accept image|photo|file and normalize onto req.file (legacy .single('image') compatible). */
+export const uploadSingle = (req, res, next) => {
+  imageFieldsUpload(req, res, (err) => {
+    if (err) return next(err);
+    const bag = req.files || {};
+    const picked = bag.image?.[0] || bag.photo?.[0] || bag.file?.[0] || null;
+    if (picked) req.file = picked;
+    next();
+  });
+};
 
 /** Profile photo for user management (field: profileImage) */
 export const uploadProfileImage = multer({
@@ -260,6 +275,14 @@ export function handleMulterError(err, _req, _res, next) {
     }
     if (err.code === 'LIMIT_FILE_COUNT') {
       return next(new ApiError(400, 'Too many files uploaded'));
+    }
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return next(
+        new ApiError(
+          400,
+          `Unexpected upload field "${err.field || 'unknown'}". Use field name "image" (or photo/file).`
+        )
+      );
     }
     return next(new ApiError(400, err.message));
   }
