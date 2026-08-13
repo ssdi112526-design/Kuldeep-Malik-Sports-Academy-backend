@@ -128,11 +128,21 @@ export const uploadSiteSettings = multer({
 // Entry Management uploads
 // ---------------------------
 
+const PHOTO_FIELDS = new Set([
+  'photo',
+  'parentPhoto',
+  'profileImage',
+  'studentPhoto',
+  'playerPhoto',
+  'parent_photo',
+]);
+
 const entryStorage = multer.diskStorage({
   destination: (_req, file, cb) => {
-    if (file.fieldname === 'image') return cb(null, ENTRY_EQUIPMENT_DIR);
     if (file.fieldname === 'certificates') return cb(null, COACH_CERTS_DIR);
-    if (file.fieldname === 'photo' || file.fieldname === 'parentPhoto') return cb(null, ENTRY_PHOTOS_DIR);
+    if (PHOTO_FIELDS.has(file.fieldname)) return cb(null, ENTRY_PHOTOS_DIR);
+    // Equipment tools use field name "image"
+    if (file.fieldname === 'image') return cb(null, ENTRY_EQUIPMENT_DIR);
     // aadhaarFront / aadhaarBack / panCard etc
     return cb(null, ENTRY_DOCS_DIR);
   },
@@ -170,23 +180,56 @@ const uploadEntryBase = multer({
   limits: { fileSize: MAX_IMAGE }, // 10MB max as per requirement
 });
 
-// Student
-export const uploadStudentEntry = uploadEntryBase.fields([
-  { name: 'photo', maxCount: 1 },
-  { name: 'parentPhoto', maxCount: 1 },
-  { name: 'aadhaarFront', maxCount: 1 },
-  { name: 'aadhaarBack', maxCount: 1 },
-  { name: 'panCard', maxCount: 1 },
-]);
+const STUDENT_FILE_ALIAS = {
+  image: 'photo',
+  file: 'photo',
+  profileImage: 'photo',
+  studentPhoto: 'photo',
+  playerPhoto: 'photo',
+  parent_photo: 'parentPhoto',
+};
 
-// Coach
-export const uploadCoachEntry = uploadEntryBase.fields([
-  { name: 'photo', maxCount: 1 },
-  { name: 'aadhaarFront', maxCount: 1 },
-  { name: 'aadhaarBack', maxCount: 1 },
-  { name: 'panCard', maxCount: 1 },
-  { name: 'certificates', maxCount: 10 },
-]);
+const STUDENT_FILE_KEYS = new Set(['photo', 'parentPhoto', 'aadhaarFront', 'aadhaarBack', 'panCard']);
+const COACH_FILE_KEYS = new Set(['photo', 'aadhaarFront', 'aadhaarBack', 'panCard', 'certificates']);
+
+function normalizeEntryFiles(fileList, allowedKeys, aliasMap = {}) {
+  const bag = {};
+  for (const key of allowedKeys) bag[key] = [];
+  for (const file of fileList || []) {
+    const key = aliasMap[file.fieldname] || file.fieldname;
+    if (!allowedKeys.has(key)) {
+      console.warn(`[upload] ignoring unexpected entry field "${file.fieldname}"`);
+      continue;
+    }
+    // certificates allow multiple; others keep first
+    if (key !== 'certificates' && bag[key].length >= 1) continue;
+    if (key === 'certificates' && bag[key].length >= 10) continue;
+    bag[key].push(file);
+  }
+  return bag;
+}
+
+/**
+ * Use .any() so a proxy/client typo field cannot hard-fail with Multer "Unexpected field".
+ * Known aliases (image/file/profileImage) map onto photo.
+ */
+export const uploadStudentEntry = (req, res, next) => {
+  uploadEntryBase.any()(req, res, (err) => {
+    if (err) return next(err);
+    const list = Array.isArray(req.files) ? req.files : [];
+    req.files = normalizeEntryFiles(list, STUDENT_FILE_KEYS, STUDENT_FILE_ALIAS);
+    next();
+  });
+};
+
+export const uploadCoachEntry = (req, res, next) => {
+  uploadEntryBase.any()(req, res, (err) => {
+    if (err) return next(err);
+    const list = Array.isArray(req.files) ? req.files : [];
+    req.files = normalizeEntryFiles(list, COACH_FILE_KEYS, STUDENT_FILE_ALIAS);
+    next();
+  });
+};
 
 // Equipment / Tools image
 export const uploadEquipmentEntry = uploadEntryBase.single('image');
@@ -269,22 +312,24 @@ export function withMediaBlobBackup(uploader) {
 
 export function handleMulterError(err, _req, _res, next) {
   if (!err) return next();
-  if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
+  const code = err.code || err?.name;
+  const isMulter = err instanceof multer.MulterError || code === 'LIMIT_UNEXPECTED_FILE' || code === 'LIMIT_FILE_SIZE' || code === 'LIMIT_FILE_COUNT';
+  if (isMulter) {
+    if (code === 'LIMIT_FILE_SIZE') {
       return next(new ApiError(400, 'File exceeds size limit (images 10MB, videos 500MB)'));
     }
-    if (err.code === 'LIMIT_FILE_COUNT') {
+    if (code === 'LIMIT_FILE_COUNT') {
       return next(new ApiError(400, 'Too many files uploaded'));
     }
-    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    if (code === 'LIMIT_UNEXPECTED_FILE') {
       return next(
         new ApiError(
           400,
-          `Unexpected upload field "${err.field || 'unknown'}". Use field name "image" (or photo/file).`
+          `Unexpected upload field "${err.field || 'unknown'}". For players use field name "photo" (parentPhoto for guardian).`
         )
       );
     }
-    return next(new ApiError(400, err.message));
+    return next(new ApiError(400, err.message || 'Upload failed'));
   }
   return next(err);
 }
