@@ -56,8 +56,17 @@ function isAllowedOrigin(origin) {
   if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return true;
   try {
     const { hostname } = new URL(origin);
-    // Production brand domain (with/without www)
-    if (hostname === 'kushti.co.in' || hostname === 'www.kushti.co.in') return true;
+    // Production brand domains (with/without www)
+    if (
+      hostname === 'kushti.co.in' ||
+      hostname === 'www.kushti.co.in' ||
+      hostname === 'fastsearch.in' ||
+      hostname === 'www.fastsearch.in'
+    ) {
+      return true;
+    }
+    // Vercel preview deployments for this frontend
+    if (hostname.endsWith('.vercel.app')) return true;
     if (process.env.NODE_ENV !== 'production') {
       if (
         hostname === 'localhost' ||

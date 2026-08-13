@@ -19,9 +19,12 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const API_BASE = (process.env.RENDER_API_URL || 'https://kuldeep-malik-sports-academy-backend.onrender.com').replace(/\/$/, '');
-const EMAIL = process.env.ADMIN_EMAIL || 'fastrecovery26@gmail.com';
-const PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@123456';
+const API_BASE = (process.env.RENDER_API_URL || 'https://kuldeep-malik-sports-academy-backend.onrender.com').replace(
+  /\/$/,
+  ''
+);
+const EMAIL = process.env.ADMIN_EMAIL || process.env.SYNC_ADMIN_EMAIL || '';
+const PASSWORD = process.env.ADMIN_PASSWORD || process.env.SYNC_ADMIN_PASSWORD || '';
 const UPLOADS_DIR = path.resolve(__dirname, '../uploads');
 
 function walkFiles(dir, base = dir) {
@@ -69,11 +72,23 @@ async function uploadOne(token, file) {
 }
 
 async function main() {
+  if (!EMAIL || !PASSWORD) {
+    throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD (or SYNC_ADMIN_*) in env before syncing uploads.');
+  }
   if (!fs.existsSync(UPLOADS_DIR)) {
     throw new Error(`Uploads folder not found: ${UPLOADS_DIR}`);
   }
 
-  const files = walkFiles(UPLOADS_DIR);
+  const only = String(process.env.SYNC_ONLY || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  let files = walkFiles(UPLOADS_DIR);
+  if (only.length) {
+    files = files.filter((f) => only.some((name) => f.relative === name || f.relative.endsWith(`/${name}`) || f.relative.endsWith(name)));
+  }
+
   console.log(`API: ${API_BASE}`);
   console.log(`Found ${files.length} files to sync`);
 
