@@ -786,7 +786,7 @@ model AttendanceSession {
 model Attendance {
   id                  String             @id @default(uuid())
   studentId           String             @map("student_id")
-  student             Student            @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  student             Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
   attendanceSessionId String?            @map("attendance_session_id")
   session             AttendanceSession? @relation(fields: [attendanceSessionId], references: [id], onDelete: SetNull)
   registrationId      String             @map("registration_id") @db.VarChar(50)
@@ -856,7 +856,7 @@ model CoachAttendanceSession {
 model CoachAttendance {
   id                  String                  @id @default(uuid())
   coachId             String                  @map("coach_id")
-  coach               Coach                   @relation(fields: [coachId], references: [id], onDelete: Restrict)
+  coach               Coach                   @relation(fields: [coachId], references: [id], onDelete: Cascade)
   attendanceSessionId String?                 @map("attendance_session_id")
   session             CoachAttendanceSession? @relation(fields: [attendanceSessionId], references: [id], onDelete: SetNull)
   coachCode           String                  @map("coach_code") @db.VarChar(50)

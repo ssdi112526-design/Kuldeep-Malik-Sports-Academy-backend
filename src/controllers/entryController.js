@@ -673,7 +673,12 @@ export const deleteStudent = asyncHandler(async (req, res) => {
   const student = await prisma.student.findUnique({ where: { id: req.params.id } });
   if (!student) throw new ApiError(404, 'Student not found');
 
-  await prisma.student.delete({ where: { id: req.params.id } });
+  // Attendance rows historically used ON DELETE RESTRICT — remove them first so delete succeeds.
+  await prisma.$transaction(async (tx) => {
+    await tx.attendance.deleteMany({ where: { studentId: student.id } });
+    await tx.student.delete({ where: { id: student.id } });
+  });
+
   if (student.photo) deleteUploadedFile(student.photo);
   if (student.parentPhoto) deleteUploadedFile(student.parentPhoto);
   if (student.qrCodePath) deleteUploadedFile(student.qrCodePath);
@@ -1401,7 +1406,12 @@ export const resetStudentPassword = asyncHandler(async (req, res) => {
 export const deleteCoach = asyncHandler(async (req, res) => {
   const coach = await prisma.coach.findUnique({ where: { id: req.params.id } });
   if (!coach) throw new ApiError(404, 'Coach not found');
-  await prisma.coach.delete({ where: { id: req.params.id } });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.coachAttendance.deleteMany({ where: { coachId: coach.id } });
+    await tx.coach.delete({ where: { id: coach.id } });
+  });
+
   if (coach.photo) deleteUploadedFile(coach.photo);
   if (coach.qrCodePath) deleteUploadedFile(coach.qrCodePath);
   res.json({ success: true, message: 'Coach deleted' });
