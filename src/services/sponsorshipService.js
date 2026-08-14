@@ -1,13 +1,38 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { deleteUploadedFile, toPublicPath } from '../middleware/upload.js';
 import { serializeMoney } from './financeService.js';
 
 const STATUSES = new Set(['Active', 'Expired', 'Upcoming', 'Cancelled']);
+/** Matches Decimal(18, 2) — max integer digits before overflow */
+const MAX_AMOUNT = new Prisma.Decimal('9999999999999999.99');
 
 function todayOnly() {
   const n = new Date();
   return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
+}
+
+/** Parse money safely for Prisma Decimal (no float math). */
+export function parseSponsorshipAmount(value) {
+  if (value === undefined || value === null || value === '') {
+    return new Prisma.Decimal(0);
+  }
+  const raw = String(value).trim().replace(/,/g, '');
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+    throw new ApiError(400, 'Amount must be a valid number with up to 2 decimal places');
+  }
+  let amount;
+  try {
+    amount = new Prisma.Decimal(raw);
+  } catch {
+    throw new ApiError(400, 'Amount must be a valid number');
+  }
+  if (amount.isNeg()) throw new ApiError(400, 'Amount cannot be negative');
+  if (amount.gt(MAX_AMOUNT)) {
+    throw new ApiError(400, 'Amount is too large (maximum 9,999,999,999,999,999.99)');
+  }
+  return amount;
 }
 
 /** Derive display status from dates unless Cancelled */
@@ -118,7 +143,7 @@ export async function createSponsorship(payload, userId, file) {
     data: {
       sponsorName,
       sponsorshipType,
-      amount: Number(payload.amount) || 0,
+      amount: parseSponsorshipAmount(payload.amount),
       startDate: new Date(payload.startDate),
       endDate: payload.endDate ? new Date(payload.endDate) : null,
       status,
@@ -141,7 +166,7 @@ export async function updateSponsorship(id, payload, userId, file) {
   if (payload.sponsorshipType !== undefined) {
     data.sponsorshipType = String(payload.sponsorshipType).trim();
   }
-  if (payload.amount !== undefined) data.amount = Number(payload.amount) || 0;
+  if (payload.amount !== undefined) data.amount = parseSponsorshipAmount(payload.amount);
   if (payload.startDate !== undefined) data.startDate = new Date(payload.startDate);
   if (payload.endDate !== undefined) {
     data.endDate = payload.endDate ? new Date(payload.endDate) : null;

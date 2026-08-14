@@ -237,7 +237,8 @@ model Equipment {
   availableQuantity Int @default(0) @map("available_quantity")
 
   purchaseDate DateTime? @map("purchase_date")
-  purchaseCost Int? @default(0) @map("purchase_cost")
+  /// Money / invoice-style amounts (was Int — overflowed INT4 for values > 2^31-1)
+  purchaseCost Decimal? @default(0) @map("purchase_cost") @db.Decimal(14, 2)
   supplier String? @db.VarChar(200)
 
   condition EquipmentCondition @default(Good)
@@ -1239,7 +1240,8 @@ model Sponsorship {
   id               String             @id @default(uuid())
   sponsorName      String             @map("sponsor_name") @db.VarChar(200)
   sponsorshipType  String             @map("sponsorship_type") @db.VarChar(120)
-  amount           Decimal            @default(0) @db.Decimal(12, 2)
+  /// Sponsorship value in INR (was Decimal(12,2) — overflowed for large totals)
+  amount           Decimal            @default(0) @db.Decimal(18, 2)
   startDate        DateTime           @map("start_date")
   endDate          DateTime?          @map("end_date")
   status           SponsorshipStatus  @default(Active)

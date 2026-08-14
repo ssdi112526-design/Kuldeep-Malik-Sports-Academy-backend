@@ -536,6 +536,23 @@ export const createParentAccountValidation = [
   }),
 ];
 
+export const updateParentAccountValidation = [
+  ...idParam,
+  body('fullName').optional().trim().notEmpty().isLength({ max: 150 }),
+  body('email').optional().trim().isEmail(),
+  body('password').optional({ checkFalsy: true }).isLength({ min: 6 }),
+  body('phone').optional({ checkFalsy: true }).trim(),
+  body('relation').optional({ checkFalsy: true }).trim(),
+  body('isActive').optional(),
+  body('studentIds').optional().custom((value) => {
+    if (value === undefined || value === null || value === '') return true;
+    if (!parseStudentIds(value).length) {
+      throw new Error('Link at least one player');
+    }
+    return true;
+  }),
+];
+
 export const createParentAccount = asyncHandler(async (req, res) => {
   const email = String(req.body.email).trim().toLowerCase();
   const studentIds = [...new Set(parseStudentIds(req.body.studentIds))];
@@ -599,7 +616,7 @@ export const createParentAccount = asyncHandler(async (req, res) => {
 export const listParents = asyncHandler(async (_req, res) => {
   const items = await prisma.parentProfile.findMany({
     include: {
-      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true } },
+      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, profileImage: true } },
       links: {
         include: { student: { select: { id: true, fullName: true, registrationNumber: true, photo: true } } },
       },
@@ -607,6 +624,111 @@ export const listParents = asyncHandler(async (_req, res) => {
     orderBy: { createdAt: 'desc' },
   });
   res.json({ success: true, data: { parents: withIds(items) } });
+});
+
+export const updateParentAccount = asyncHandler(async (req, res) => {
+  const profile = await prisma.parentProfile.findUnique({
+    where: { id: req.params.id },
+    include: { user: true, links: true },
+  });
+  if (!profile) throw new ApiError(404, 'Parent account not found');
+
+  const nextEmail =
+    req.body.email !== undefined
+      ? String(req.body.email).trim().toLowerCase()
+      : (profile.email || profile.user?.email || '').toLowerCase();
+
+  if (req.body.email !== undefined) {
+    const clash = await prisma.user.findFirst({
+      where: { email: nextEmail, NOT: { id: profile.userId } },
+    });
+    if (clash) throw new ApiError(400, 'A user with this email already exists');
+  }
+
+  let studentIds;
+  if (req.body.studentIds !== undefined) {
+    studentIds = [...new Set(parseStudentIds(req.body.studentIds))];
+    if (!studentIds.length) throw new ApiError(400, 'Link at least one player');
+    const students = await prisma.student.findMany({ where: { id: { in: studentIds } } });
+    if (students.length !== studentIds.length) throw new ApiError(400, 'One or more players not found');
+  }
+
+  const photo = req.file ? toPublicPath(req.file.filename) : undefined;
+  const relation =
+    req.body.relation !== undefined ? req.body.relation?.trim() || null : profile.relation;
+  const fullName =
+    req.body.fullName !== undefined ? req.body.fullName.trim() : profile.fullName;
+  const phone = req.body.phone !== undefined ? req.body.phone?.trim() || null : profile.phone;
+
+  let passwordHash;
+  if (req.body.password) {
+    passwordHash = await bcrypt.hash(String(req.body.password), 12);
+  }
+
+  const isActive =
+    req.body.isActive === undefined
+      ? undefined
+      : ['true', '1', 'yes', true, 1].includes(
+          typeof req.body.isActive === 'string' ? req.body.isActive.toLowerCase() : req.body.isActive
+        );
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: profile.userId },
+      data: {
+        ...(req.body.fullName !== undefined ? { name: fullName } : {}),
+        ...(req.body.email !== undefined ? { email: nextEmail } : {}),
+        ...(req.body.phone !== undefined ? { mobile: phone } : {}),
+        ...(passwordHash ? { password: passwordHash } : {}),
+        ...(photo ? { profileImage: photo } : {}),
+        ...(isActive !== undefined ? { isActive } : {}),
+      },
+    });
+
+    if (studentIds) {
+      await tx.parentStudentLink.deleteMany({ where: { parentId: profile.id } });
+      await tx.parentStudentLink.createMany({
+        data: studentIds.map((studentId) => ({
+          parentId: profile.id,
+          studentId,
+          relation,
+        })),
+      });
+    }
+
+    return tx.parentProfile.update({
+      where: { id: profile.id },
+      data: {
+        ...(req.body.fullName !== undefined ? { fullName } : {}),
+        ...(req.body.email !== undefined ? { email: nextEmail } : {}),
+        ...(req.body.phone !== undefined ? { phone } : {}),
+        ...(req.body.relation !== undefined ? { relation } : {}),
+        ...(photo ? { photo } : {}),
+      },
+      include: {
+        user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, profileImage: true } },
+        links: {
+          include: { student: { select: { id: true, fullName: true, registrationNumber: true, photo: true } } },
+        },
+      },
+    });
+  });
+
+  res.json({
+    success: true,
+    message: 'Parent account updated',
+    data: { parent: withId(updated) },
+  });
+});
+
+export const deleteParentAccount = asyncHandler(async (req, res) => {
+  const profile = await prisma.parentProfile.findUnique({ where: { id: req.params.id } });
+  if (!profile) throw new ApiError(404, 'Parent account not found');
+
+  // Deleting the login user cascades ParentProfile + links (schema onDelete Cascade).
+  await prisma.user.delete({ where: { id: profile.userId } });
+
+  res.json({ success: true, message: 'Parent account deleted' });
 });
 
 export const parentDashboard = asyncHandler(async (req, res) => {

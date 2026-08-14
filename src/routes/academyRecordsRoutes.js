@@ -31,6 +31,9 @@ import {
   deleteTournamentResult,
   createParentAccount,
   createParentAccountValidation,
+  updateParentAccount,
+  updateParentAccountValidation,
+  deleteParentAccount,
   listParents,
   parentDashboard,
   parentChildAttendance,
@@ -118,6 +121,15 @@ router.post(
   validate,
   createParentAccount
 );
+router.put(
+  '/admin/parents/:id',
+  ...parentAdmin,
+  runUpload,
+  ...updateParentAccountValidation,
+  validate,
+  updateParentAccount
+);
+router.delete('/admin/parents/:id', ...parentAdmin, deleteParentAccount);
 
 router.get('/parent/me', protect, requireParent, parentDashboard);
 router.get('/parent/children/:studentId/attendance', protect, requireParent, parentChildAttendance);

@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
@@ -11,6 +12,39 @@ import { centerCropSquareToJpg } from '../services/imageCropService.js';
 import { cell0 } from '../utils/zeroEmpty.js';
 
 const STRONG_PASSWORD = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+const MAX_PURCHASE_COST = new Prisma.Decimal('999999999999.99');
+const INT4_MAX = 2147483647;
+
+/** Money field — Prisma Decimal(14,2), never JS float. */
+function parsePurchaseCost(value) {
+  if (value === undefined || value === null || value === '') {
+    return new Prisma.Decimal(0);
+  }
+  const raw = String(value).trim().replace(/,/g, '');
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+    throw new ApiError(400, 'Purchase cost must be a valid number with up to 2 decimal places');
+  }
+  let amount;
+  try {
+    amount = new Prisma.Decimal(raw);
+  } catch {
+    throw new ApiError(400, 'Purchase cost must be a valid number');
+  }
+  if (amount.isNeg()) throw new ApiError(400, 'Purchase cost cannot be negative');
+  if (amount.gt(MAX_PURCHASE_COST)) {
+    throw new ApiError(400, 'Purchase cost is too large (maximum 999,999,999,999.99)');
+  }
+  return amount;
+}
+
+function parseInt4Field(value, label, { defaultValue = 0 } = {}) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > INT4_MAX) {
+    throw new ApiError(400, `${label} must be a whole number between 0 and ${INT4_MAX}`);
+  }
+  return n;
+}
 
 async function ensureStudentRole() {
   let role = await prisma.role.findUnique({ where: { slug: 'student' } });
@@ -1618,10 +1652,10 @@ export const createEquipment = asyncHandler(async (req, res) => {
       category: category || null,
       image,
 
-      quantity: quantity ? Number(quantity) : 0,
-      availableQuantity: availableQuantity ? Number(availableQuantity) : 0,
+      quantity: parseInt4Field(quantity, 'Quantity'),
+      availableQuantity: parseInt4Field(availableQuantity, 'Available quantity'),
       purchaseDate: purchaseDate ? new Date(purchaseDate) : null,
-      purchaseCost: purchaseCost ? Number(purchaseCost) : 0,
+      purchaseCost: parsePurchaseCost(purchaseCost),
       supplier: supplier || null,
 
       condition: condition || 'Good',
@@ -1634,7 +1668,7 @@ export const createEquipment = asyncHandler(async (req, res) => {
       qrCodePath,
       barcodeValue: req.body.barcodeValue || null,
 
-      order: order ? Number(order) : 0,
+      order: parseInt4Field(order, 'Order'),
       isActive: true,
     },
   });
@@ -1665,10 +1699,21 @@ export const updateEquipment = asyncHandler(async (req, res) => {
         description: req.body.description !== undefined ? String(req.body.description).trim() : existing.description,
         category: req.body.category !== undefined ? req.body.category || null : existing.category,
         image,
-        quantity: req.body.quantity !== undefined ? Number(req.body.quantity) : existing.quantity,
-        availableQuantity: req.body.availableQuantity !== undefined ? Number(req.body.availableQuantity) : existing.availableQuantity,
+        quantity:
+          req.body.quantity !== undefined
+            ? parseInt4Field(req.body.quantity, 'Quantity', { defaultValue: existing.quantity })
+            : existing.quantity,
+        availableQuantity:
+          req.body.availableQuantity !== undefined
+            ? parseInt4Field(req.body.availableQuantity, 'Available quantity', {
+                defaultValue: existing.availableQuantity,
+              })
+            : existing.availableQuantity,
         purchaseDate: req.body.purchaseDate ? new Date(req.body.purchaseDate) : existing.purchaseDate,
-        purchaseCost: req.body.purchaseCost !== undefined ? Number(req.body.purchaseCost) || 0 : existing.purchaseCost,
+        purchaseCost:
+          req.body.purchaseCost !== undefined
+            ? parsePurchaseCost(req.body.purchaseCost)
+            : existing.purchaseCost,
         supplier: req.body.supplier !== undefined ? req.body.supplier || null : existing.supplier,
         condition: req.body.condition !== undefined ? req.body.condition : existing.condition,
         location: req.body.location !== undefined ? req.body.location || null : existing.location,
