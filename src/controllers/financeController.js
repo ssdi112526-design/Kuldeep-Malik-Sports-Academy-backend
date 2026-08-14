@@ -65,11 +65,12 @@ export const generateMonthlyFees = asyncHandler(async (req, res) => {
     details: result,
     req,
   });
-  const catLabel = result.categoryLabel || result.category || req.body.category || 'Monthly';
+  const catLabel = result.categoryLabel || result.category || 'Monthly Fees';
   const parts = [`Created ${result.created}`, `updated ${result.updated}`];
-  if (result.defaultsUpdated) parts.push(`default set on ${result.defaultsUpdated} student(s)`);
+  if (result.defaultsUpdated) parts.push(`defaults saved for ${result.defaultsUpdated} player(s)`);
   if (result.paymentsCleared) parts.push(`cleared ${result.paymentsCleared} payment(s)`);
   if (result.skipped) parts.push(`${result.skipped} skipped (₹0 fee)`);
+  if (result.feeTotal != null) parts.push(`bill total ₹${Number(result.feeTotal).toLocaleString('en-IN')}`);
   res.json({
     success: true,
     message: `${catLabel} generated — ${parts.join(', ')}`,

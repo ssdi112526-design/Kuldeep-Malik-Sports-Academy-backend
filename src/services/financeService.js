@@ -492,16 +492,23 @@ export async function collectStudentFee(payload, userId) {
 }
 
 /**
- * Generate (or regenerate) fee bills for Active students by category.
- * Unique on student+month+year+category — regenerating clears that category’s payments.
+ * Generate (or regenerate) fee bills for Active students.
  *
- * feeAmount: used for this period’s bills.
- * saveAsStudentDefault (default true when feeAmount given): also writes student default for category.
+ * Preferred (combined bill):
+ *   monthlyFee + hostelFee + otherFee → one Monthly category row with components + total.
+ *
+ * Legacy (single category):
+ *   category + feeAmount → one row for that category (unchanged behaviour).
+ *
+ * saveAsStudentDefault: writes student monthlyFee/hostelFee/otherFee defaults when amounts given.
  */
 export async function generateMonthlyFees({
   month,
   year,
   feeAmount,
+  monthlyFee,
+  hostelFee,
+  otherFee,
   studentIds,
   userId,
   saveAsStudentDefault,
@@ -509,14 +516,35 @@ export async function generateMonthlyFees({
   title: titleInput,
 }) {
   const { month: m, year: y } = parseMonthYear(month, year);
-  const category = normalizeFeeCategory(categoryInput);
-  const title =
-    category === 'Other' ? String(titleInput || '').trim() || 'Other Fees' : null;
-  const defaultField = studentDefaultFeeField(category);
   const where = { status: 'Active' };
   if (Array.isArray(studentIds) && studentIds.length) {
     where.id = { in: studentIds };
   }
+
+  const hasCombinedInput =
+    monthlyFee !== undefined || hostelFee !== undefined || otherFee !== undefined;
+
+  // Combined Monthly + Hostel + Other → one Monthly bill (preferred UI)
+  if (hasCombinedInput) {
+    return generateCombinedMonthlyFees({
+      month: m,
+      year: y,
+      monthlyFee,
+      hostelFee,
+      otherFee,
+      studentIds,
+      userId,
+      saveAsStudentDefault,
+      titleInput,
+      where,
+    });
+  }
+
+  // --- Legacy single-category generate ---
+  const category = normalizeFeeCategory(categoryInput);
+  const title =
+    category === 'Other' ? String(titleInput || '').trim() || 'Other Fees' : null;
+  const defaultField = studentDefaultFeeField(category);
 
   const hasOverride = feeAmount != null && feeAmount !== '';
   const saveDefaults = hasOverride && saveAsStudentDefault !== false;
@@ -548,8 +576,8 @@ export async function generateMonthlyFees({
     }
 
     const discount = money(s.defaultDiscount);
+    const components = feeComponentsForCategory(category, amount);
 
-    // Include soft-deleted rows — unique(studentId, month, year, category) blocks a second create
     const existing = await prisma.studentFeeMonth.findFirst({
       where: { studentId: s.id, month: m, year: y, category },
     });
@@ -575,6 +603,9 @@ export async function generateMonthlyFees({
           category,
           title,
           feeAmount: dec(amount),
+          monthlyAmount: dec(components.monthlyAmount),
+          hostelAmount: dec(components.hostelAmount),
+          otherAmount: dec(components.otherAmount),
           previousDue: dec(previousDue),
           discount: dec(discount),
           paidAmount: dec(0),
@@ -604,6 +635,9 @@ export async function generateMonthlyFees({
         category,
         title,
         feeAmount: dec(amount),
+        monthlyAmount: dec(components.monthlyAmount),
+        hostelAmount: dec(components.hostelAmount),
+        otherAmount: dec(components.otherAmount),
         previousDue: dec(previousDue),
         discount: dec(discount),
         paidAmount: dec(0),
@@ -618,11 +652,10 @@ export async function generateMonthlyFees({
   }
 
   if (created + updated === 0) {
-    const err = new Error(
+    throw new ApiError(
+      400,
       `No ${feeCategoryLabel(category)} generated. Enter a fee amount, or set each student’s ${feeCategoryLabel(category)} via Defaults first.`
     );
-    err.statusCode = 400;
-    throw err;
   }
 
   return {
@@ -636,6 +669,204 @@ export async function generateMonthlyFees({
     year: y,
     category,
     categoryLabel: feeCategoryLabel(category),
+  };
+}
+
+const FEE_AMOUNT_MAX = 9999999999.99;
+
+function parseFeeComponent(value, label) {
+  if (value === undefined || value === null || value === '') return 0;
+  const raw = String(value).trim().replace(/,/g, '');
+  if (/^-/.test(raw)) throw new ApiError(400, 'Fees cannot be negative');
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+    throw new ApiError(400, `${label} must be a valid amount`);
+  }
+  const n = money(raw);
+  if (n < 0) throw new ApiError(400, 'Fees cannot be negative');
+  if (n > FEE_AMOUNT_MAX) throw new ApiError(400, `${label} is too large`);
+  return n;
+}
+
+function feeComponentsForCategory(category, amount) {
+  const a = money(amount);
+  if (category === 'Hostel') return { monthlyAmount: 0, hostelAmount: a, otherAmount: 0 };
+  if (category === 'Other') return { monthlyAmount: 0, hostelAmount: 0, otherAmount: a };
+  return { monthlyAmount: a, hostelAmount: 0, otherAmount: 0 };
+}
+
+async function generateCombinedMonthlyFees({
+  month: m,
+  year: y,
+  monthlyFee,
+  hostelFee,
+  otherFee,
+  userId,
+  saveAsStudentDefault,
+  titleInput,
+  where,
+}) {
+  const providedAny =
+    (monthlyFee !== undefined && monthlyFee !== null && String(monthlyFee).trim() !== '') ||
+    (hostelFee !== undefined && hostelFee !== null && String(hostelFee).trim() !== '') ||
+    (otherFee !== undefined && otherFee !== null && String(otherFee).trim() !== '');
+
+  let overrideMonthly;
+  let overrideHostel;
+  let overrideOther;
+  if (providedAny) {
+    overrideMonthly = parseFeeComponent(monthlyFee, 'Monthly Fees');
+    overrideHostel = parseFeeComponent(hostelFee, 'Hostel Fees');
+    overrideOther = parseFeeComponent(otherFee, 'Other Fees');
+    const totalCheck = addMoney(overrideMonthly, overrideHostel, overrideOther);
+    if (totalCheck <= 0) {
+      throw new ApiError(400, 'Enter at least one fee amount greater than zero');
+    }
+  }
+
+  const saveDefaults = providedAny && saveAsStudentDefault !== false;
+  const title = String(titleInput || '').trim() || null;
+
+  const students = await prisma.student.findMany({
+    where,
+    select: { id: true, monthlyFee: true, hostelFee: true, otherFee: true, defaultDiscount: true },
+  });
+
+  let created = 0;
+  let updated = 0;
+  let paymentsCleared = 0;
+  let skipped = 0;
+  let defaultsUpdated = 0;
+  const now = new Date();
+  const category = 'Monthly';
+
+  for (const s of students) {
+    const monthlyAmount = providedAny ? overrideMonthly : money(s.monthlyFee);
+    const hostelAmount = providedAny ? overrideHostel : money(s.hostelFee);
+    const otherAmount = providedAny ? overrideOther : money(s.otherFee);
+    const amount = addMoney(monthlyAmount, hostelAmount, otherAmount);
+
+    if (amount <= 0) {
+      skipped += 1;
+      continue;
+    }
+
+    // Backend always owns the total — never trust a client-sent total.
+    const verifiedTotal = addMoney(monthlyAmount, hostelAmount, otherAmount);
+    if (verifiedTotal !== amount) {
+      throw new ApiError(400, 'Fee total mismatch');
+    }
+
+    if (saveDefaults) {
+      await prisma.student.update({
+        where: { id: s.id },
+        data: {
+          monthlyFee: dec(monthlyAmount),
+          hostelFee: dec(hostelAmount),
+          otherFee: dec(otherAmount),
+        },
+      });
+      defaultsUpdated += 1;
+    }
+
+    const discount = money(s.defaultDiscount);
+
+    const existing = await prisma.studentFeeMonth.findFirst({
+      where: { studentId: s.id, month: m, year: y, category },
+    });
+
+    if (existing) {
+      const payResult = await prisma.studentFeePayment.updateMany({
+        where: { feeMonthId: existing.id, deletedAt: null },
+        data: { deletedAt: now, deletedById: userId || null },
+      });
+      paymentsCleared += payResult.count;
+
+      const previousDue = await getStudentOutstanding(s.id, existing.id, prisma, category);
+      const { status, remainingDue } = feeStatusFromAmounts({
+        feeAmount: amount,
+        previousDue,
+        discount,
+        paidAmount: 0,
+      });
+
+      await prisma.studentFeeMonth.update({
+        where: { id: existing.id },
+        data: {
+          category,
+          title,
+          feeAmount: dec(amount),
+          monthlyAmount: dec(monthlyAmount),
+          hostelAmount: dec(hostelAmount),
+          otherAmount: dec(otherAmount),
+          previousDue: dec(previousDue),
+          discount: dec(discount),
+          paidAmount: dec(0),
+          remainingDue: dec(remainingDue),
+          status,
+          deletedAt: null,
+          updatedById: userId || null,
+        },
+      });
+      await syncStudentPaymentStatus(prisma, s.id);
+      updated += 1;
+      continue;
+    }
+
+    const previousDue = await getStudentOutstanding(s.id, null, prisma, category);
+    const { status, remainingDue } = feeStatusFromAmounts({
+      feeAmount: amount,
+      previousDue,
+      discount,
+      paidAmount: 0,
+    });
+    await prisma.studentFeeMonth.create({
+      data: {
+        studentId: s.id,
+        month: m,
+        year: y,
+        category,
+        title,
+        feeAmount: dec(amount),
+        monthlyAmount: dec(monthlyAmount),
+        hostelAmount: dec(hostelAmount),
+        otherAmount: dec(otherAmount),
+        previousDue: dec(previousDue),
+        discount: dec(discount),
+        paidAmount: dec(0),
+        remainingDue: dec(remainingDue),
+        status,
+        createdById: userId || null,
+        updatedById: userId || null,
+      },
+    });
+    await syncStudentPaymentStatus(prisma, s.id);
+    created += 1;
+  }
+
+  if (created + updated === 0) {
+    throw new ApiError(
+      400,
+      'No fees generated. Enter Monthly / Hostel / Other amounts, or set each player’s fee defaults first.'
+    );
+  }
+
+  return {
+    created,
+    updated,
+    paymentsCleared,
+    skipped,
+    defaultsUpdated,
+    total: students.length,
+    month: m,
+    year: y,
+    category,
+    categoryLabel: 'Monthly Fees (combined)',
+    monthlyFee: providedAny ? overrideMonthly : null,
+    hostelFee: providedAny ? overrideHostel : null,
+    otherFee: providedAny ? overrideOther : null,
+    feeTotal: providedAny
+      ? addMoney(overrideMonthly, overrideHostel, overrideOther)
+      : null,
   };
 }
 

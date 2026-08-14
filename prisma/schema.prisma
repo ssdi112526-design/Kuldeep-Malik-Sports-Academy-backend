@@ -1007,6 +1007,10 @@ model StudentFeeMonth {
   category     StudentFeeCategory  @default(Monthly)
   title        String?             @db.VarChar(200)
   feeAmount    Decimal             @map("fee_amount") @db.Decimal(12, 2)
+  /// Combined bill breakdown (category=Monthly): sum must equal feeAmount
+  monthlyAmount Decimal            @default(0) @map("monthly_amount") @db.Decimal(12, 2)
+  hostelAmount  Decimal            @default(0) @map("hostel_amount") @db.Decimal(12, 2)
+  otherAmount   Decimal            @default(0) @map("other_amount") @db.Decimal(12, 2)
   previousDue  Decimal             @default(0) @map("previous_due") @db.Decimal(12, 2)
   discount     Decimal             @default(0) @db.Decimal(12, 2)
   paidAmount   Decimal             @default(0) @map("paid_amount") @db.Decimal(12, 2)
