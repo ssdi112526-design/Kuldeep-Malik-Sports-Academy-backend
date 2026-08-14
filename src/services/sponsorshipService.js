@@ -13,10 +13,10 @@ function todayOnly() {
   return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
 }
 
-/** Parse money safely for Prisma Decimal (no float math). */
+/** Parse money safely for Prisma Decimal (no float math). Returns string for safe PG binding. */
 export function parseSponsorshipAmount(value) {
   if (value === undefined || value === null || value === '') {
-    return new Prisma.Decimal(0);
+    return '0.00';
   }
   const raw = String(value).trim().replace(/,/g, '');
   if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
@@ -32,7 +32,7 @@ export function parseSponsorshipAmount(value) {
   if (amount.gt(MAX_AMOUNT)) {
     throw new ApiError(400, 'Amount is too large (maximum 9,999,999,999,999,999.99)');
   }
-  return amount;
+  return amount.toFixed(2);
 }
 
 /** Derive display status from dates unless Cancelled */
