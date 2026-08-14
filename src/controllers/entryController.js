@@ -15,10 +15,10 @@ const STRONG_PASSWORD = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 const MAX_PURCHASE_COST = new Prisma.Decimal('999999999999.99');
 const INT4_MAX = 2147483647;
 
-/** Money field — Prisma Decimal(14,2), never JS float. */
+/** Money field — Prisma Decimal(14,2), never JS float. Returns string for safe PG binding. */
 function parsePurchaseCost(value) {
   if (value === undefined || value === null || value === '') {
-    return new Prisma.Decimal(0);
+    return '0.00';
   }
   const raw = String(value).trim().replace(/,/g, '');
   if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
@@ -34,7 +34,7 @@ function parsePurchaseCost(value) {
   if (amount.gt(MAX_PURCHASE_COST)) {
     throw new ApiError(400, 'Purchase cost is too large (maximum 999,999,999,999.99)');
   }
-  return amount;
+  return amount.toFixed(2);
 }
 
 function parseInt4Field(value, label, { defaultValue = 0 } = {}) {
