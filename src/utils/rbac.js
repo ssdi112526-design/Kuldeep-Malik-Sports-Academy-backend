@@ -155,6 +155,27 @@ export function serializeUser(user, permissions = []) {
   };
 }
 
+let allPermissionKeysCache = { at: 0, keys: null };
+const AUTH_CONTEXT_TTL_MS = 20_000;
+const authContextCache = new Map();
+
+async function getAllPermissionKeys() {
+  const now = Date.now();
+  if (allPermissionKeysCache.keys && now - allPermissionKeysCache.at < 60_000) {
+    return allPermissionKeysCache.keys;
+  }
+  const all = await prisma.permission.findMany({ select: { key: true } });
+  const keys = all.length ? all.map((p) => p.key) : ['*.*'];
+  allPermissionKeysCache = { at: now, keys };
+  return keys;
+}
+
+function permissionsFromRoleRef(user) {
+  const rows = user?.roleRef?.permissions;
+  if (!Array.isArray(rows)) return null;
+  return rows.map((r) => r.permission?.key).filter(Boolean);
+}
+
 export async function getUserPermissions(user) {
   if (!user) return [];
 
@@ -172,12 +193,13 @@ export async function getUserPermissions(user) {
 
   // Legacy admin without RBAC role → full access
   if (user.role === 'admin' && !user.roleId) {
-    const all = await prisma.permission.findMany({ select: { key: true } });
-    if (all.length) return all.map((p) => p.key);
-    return ['*.*'];
+    return getAllPermissionKeys();
   }
 
   if (!user.roleId) return [];
+
+  const nested = permissionsFromRoleRef(user);
+  if (nested) return nested;
 
   const rows = await prisma.rolePermission.findMany({
     where: { roleId: user.roleId, allowed: true },
@@ -190,7 +212,14 @@ export async function loadUserWithRole(userId) {
   return prisma.user.findUnique({
     where: { id: userId },
     include: {
-      roleRef: true,
+      roleRef: {
+        include: {
+          permissions: {
+            where: { allowed: true },
+            include: { permission: { select: { key: true } } },
+          },
+        },
+      },
       student: {
         select: {
           id: true,
@@ -241,4 +270,21 @@ export async function loadUserWithRole(userId) {
       },
     },
   });
+}
+
+export async function loadAuthContext(userId) {
+  const cached = authContextCache.get(userId);
+  if (cached && Date.now() - cached.at < AUTH_CONTEXT_TTL_MS) {
+    return { user: cached.user, permissions: cached.permissions };
+  }
+  const user = await loadUserWithRole(userId);
+  if (!user) return { user: null, permissions: [] };
+  const permissions = await getUserPermissions(user);
+  rememberAuthContext(user, permissions);
+  return { user, permissions };
+}
+
+export function rememberAuthContext(user, permissions = []) {
+  if (!user?.id) return;
+  authContextCache.set(user.id, { at: Date.now(), user, permissions });
 }

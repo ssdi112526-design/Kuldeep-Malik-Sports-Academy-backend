@@ -205,6 +205,7 @@ export async function loadAttendanceStatusMap({ from, to, studentIds } = {}) {
       studentId: true,
       date: true,
       status: true,
+      sessionSlot: true,
       markedAt: true,
       method: true,
       source: true,
@@ -213,7 +214,7 @@ export async function loadAttendanceStatusMap({ from, to, studentIds } = {}) {
       gpsAccuracy: true,
       session: { select: { sessionCode: true } },
     },
-    orderBy: { markedAt: 'asc' },
+    orderBy: [{ sessionSlot: 'desc' }, { markedAt: 'asc' }],
   });
 
   const map = new Map();
@@ -297,33 +298,29 @@ export function calcStudentRow(student, { from, to, trainingDayKeys, presentDate
   };
 }
 
-/**
- * Overall + per-student attendance for a period.
- * Present/absent are STUDENT+DATE based, never raw QR/session row counts.
- */
-export async function calculateAttendanceSummary(input = {}, { now = new Date() } = {}) {
-  const period = resolvePeriodFilter(input, now);
-  const window = await resolveCalcWindow(period, { now });
-  const { from, to } = window;
-  const trainingDayKeys = await getTrainingDayKeys();
-  const search = input.search || input.student || '';
+function attendanceScanWhere({ from, to, studentIds, search }) {
+  const rawWhere = {
+    date: { gte: from, lte: to },
+  };
+  if (studentIds?.length) rawWhere.studentId = { in: studentIds };
+  if (search) {
+    rawWhere.OR = [
+      { registrationId: { contains: String(search).trim(), mode: 'insensitive' } },
+      { student: { fullName: { contains: String(search).trim(), mode: 'insensitive' } } },
+    ];
+  }
+  return rawWhere;
+}
 
-  const students = await loadApplicableStudents({ from, to, search });
-  const statusMap = await loadAttendanceStatusMap({
-    from,
-    to,
-    studentIds: students.map((s) => s.id),
-  });
-
-  const studentRows = students.map((s) =>
-    calcStudentRow(s, {
-      from,
-      to,
-      trainingDayKeys,
-      statusByDate: statusMap.get(s.id),
-    })
-  );
-
+function buildAttendanceSummaryResult({
+  period,
+  window,
+  from,
+  to,
+  trainingDayKeys,
+  studentRows,
+  rawScanRecords,
+}) {
   const trainingDaysCalendar = countTrainingDates(from, to, trainingDayKeys);
   const expectedStudentDays = studentRows.reduce((sum, r) => sum + r.trainingDays, 0);
   const presentStudentDays = studentRows.reduce((sum, r) => sum + r.presentDays, 0);
@@ -335,19 +332,6 @@ export async function calculateAttendanceSummary(input = {}, { now = new Date() 
   const accountableStudentDays = Math.max(0, expectedStudentDays - excusedStudentDays);
   const attendancePercentage = pct2(presentStudentDays, accountableStudentDays);
 
-  const studentIds = students.map((s) => s.id);
-  const rawWhere = {
-    date: { gte: from, lte: to },
-  };
-  if (studentIds.length) rawWhere.studentId = { in: studentIds };
-  if (search) {
-    rawWhere.OR = [
-      { registrationId: { contains: String(search).trim(), mode: 'insensitive' } },
-      { student: { fullName: { contains: String(search).trim(), mode: 'insensitive' } } },
-    ];
-  }
-  const rawScanRecords = await prisma.attendance.count({ where: rawWhere });
-
   return {
     period: {
       ...period,
@@ -356,7 +340,7 @@ export async function calculateAttendanceSummary(input = {}, { now = new Date() 
       cappedToToday: window.cappedToToday,
     },
     summary: {
-      totalStudents: students.length,
+      totalStudents: studentRows.length,
       trainingDays: trainingDaysCalendar,
       expectedStudentDays,
       presentStudentDays,
@@ -367,7 +351,6 @@ export async function calculateAttendanceSummary(input = {}, { now = new Date() 
       excusedStudentDays,
       accountableStudentDays,
       attendancePercentage,
-      // UI-friendly aliases
       present: presentStudentDays,
       absent: absentStudentDays,
       leave: leaveStudentDays,
@@ -382,16 +365,156 @@ export async function calculateAttendanceSummary(input = {}, { now = new Date() 
   };
 }
 
-export async function calculateStudentAttendance(studentId, input = {}, { now = new Date() } = {}) {
-  const student = await prisma.student.findUnique({ where: { id: studentId } });
-  if (!student) return null;
+function statusMapFromCheckInMap(checkInMap) {
+  const map = new Map();
+  for (const [compound, hit] of checkInMap.entries()) {
+    const sep = compound.indexOf('|');
+    const studentId = compound.slice(0, sep);
+    const key = compound.slice(sep + 1);
+    if (!map.has(studentId)) map.set(studentId, new Map());
+    map.get(studentId).set(key, hit.statusKey);
+  }
+  return map;
+}
 
+function matrixFilterInput(input = {}) {
+  return {
+    statusFilter: normalizeAttendanceStatus(input.status) || String(input.status || 'all').toLowerCase(),
+    methodFilter: String(input.method || input.sourceMethod || 'all').toUpperCase(),
+    locationFilter: String(input.location || input.locationVerified || 'all').toLowerCase(),
+  };
+}
+
+function passesMatrixFilters(statusKey, hit, { statusFilter, methodFilter, locationFilter }) {
+  if (statusFilter !== 'all' && statusKey !== statusFilter) return false;
+  if (methodFilter && methodFilter !== 'ALL') {
+    if (!hit || String(hit.method || 'QR').toUpperCase() !== methodFilter) return false;
+  }
+  if (locationFilter === 'verified') {
+    if (!hit || hit.locationVerified !== true) return false;
+  }
+  if (locationFilter === 'not_verified' || locationFilter === 'unverified') {
+    if (!hit || hit.locationVerified === true) return false;
+  }
+  return true;
+}
+
+function buildMatrixRow(student, day, hit) {
+  const dayKeyStr = dateKey(day);
+  const statusKey = hit?.statusKey || 'absent';
+  const statusLabel = hit?.statusLabel || attendanceStatusLabel('absent');
+  const isPresent = statusKey === 'present';
+  return {
+    id: hit?.id || null,
+    studentId: student.id,
+    registrationId: student.registrationNumber,
+    studentName: student.fullName,
+    fatherName: student.fatherName || '',
+    batch: student.batch || '',
+    membershipType: student.membershipType || '',
+    mobileNumber: student.mobileNumber || '',
+    date: dayKeyStr,
+    dateDisplay: formatIstDateDisplay(day),
+    status: statusLabel,
+    statusKey,
+    statusLabel,
+    checkIn: isPresent ? hit?.checkIn || '' : hit?.checkIn || '',
+    checkOut: 0,
+    markedAt: hit?.markedAt || null,
+    sessionCode: hit?.sessionCode || '',
+    method: hit?.method || null,
+    source: hit?.source || null,
+    sourceLabel: hit ? hit.sourceLabel : '—',
+    distanceFromAkhada: hit?.distanceFromAkhada ?? null,
+    locationVerified: hit?.locationVerified ?? null,
+    gpsAccuracy: hit?.gpsAccuracy ?? null,
+    locationLabel:
+      !isPresent
+        ? '—'
+        : hit?.locationVerified === true
+          ? 'Verified'
+          : hit?.locationVerified === false
+            ? 'Not Verified'
+            : '—',
+    distanceLabel:
+      !isPresent || hit?.distanceFromAkhada == null
+        ? '—'
+        : `${Math.round(hit.distanceFromAkhada)}m`,
+  };
+}
+
+function collectMatrixRows({ students, dates, from, checkInMap, statusFilter, methodFilter, locationFilter }) {
+  const rows = [];
+  for (const day of dates) {
+    const dayKeyStr = dateKey(day);
+    for (const student of students) {
+      const join = toDateOnly(student.joiningDate) || from;
+      if (join.getTime() > day.getTime()) continue;
+      const hit = checkInMap.get(`${student.id}|${dayKeyStr}`);
+      const statusKey = hit?.statusKey || 'absent';
+      if (!passesMatrixFilters(statusKey, hit, { statusFilter, methodFilter, locationFilter })) continue;
+      rows.push(buildMatrixRow(student, day, hit));
+    }
+  }
+  rows.sort((a, b) => {
+    if (a.date === b.date) return a.studentName.localeCompare(b.studentName);
+    return a.date < b.date ? 1 : -1;
+  });
+  return rows;
+}
+
+/**
+ * Overall + per-student attendance for a period.
+ * Present/absent are STUDENT+DATE based, never raw QR/session row counts.
+ */
+export async function calculateAttendanceSummary(input = {}, { now = new Date() } = {}) {
+  const period = resolvePeriodFilter(input, now);
+  const window = await resolveCalcWindow(period, { now });
+  const { from, to } = window;
+  const search = input.search || input.student || '';
+
+  const [trainingDayKeys, students] = await Promise.all([
+    getTrainingDayKeys(),
+    loadApplicableStudents({ from, to, search }),
+  ]);
+  const studentIds = students.map((s) => s.id);
+  const [statusMap, rawScanRecords] = await Promise.all([
+    loadAttendanceStatusMap({ from, to, studentIds }),
+    prisma.attendance.count({ where: attendanceScanWhere({ from, to, studentIds, search }) }),
+  ]);
+
+  const studentRows = students.map((s) =>
+    calcStudentRow(s, {
+      from,
+      to,
+      trainingDayKeys,
+      statusByDate: statusMap.get(s.id),
+    })
+  );
+
+  return buildAttendanceSummaryResult({
+    period,
+    window,
+    from,
+    to,
+    trainingDayKeys,
+    studentRows,
+    rawScanRecords,
+  });
+}
+
+export async function calculateStudentAttendance(studentId, input = {}, { now = new Date() } = {}) {
   const period = resolvePeriodFilter(
     Object.keys(input).length ? input : { period: 'all' },
     now
   );
-  const window = await resolveCalcWindow(period, { now });
-  const trainingDayKeys = await getTrainingDayKeys();
+  const [student, window, trainingDayKeys] = await Promise.all([
+    prisma.student.findUnique({ where: { id: studentId } }),
+    resolveCalcWindow(period, { now }),
+    getTrainingDayKeys(),
+  ]);
+  if (!student) return null;
+
   const statusMap = await loadAttendanceStatusMap({
     from: window.from,
     to: window.to,
@@ -416,13 +539,14 @@ export async function calculateTodayStats({ date, now = new Date() } = {}) {
   } else {
     day = attendanceDateFromInstant(now);
   }
-  const totalStudents = await prisma.student.count({ where: { status: 'Active' } });
-
-  const dayRows = await prisma.attendance.findMany({
-    where: { date: day, student: { status: 'Active' } },
-    select: { studentId: true, status: true, method: true, markedAt: true },
-    orderBy: { markedAt: 'asc' },
-  });
+  const [totalStudents, dayRows] = await Promise.all([
+    prisma.student.count({ where: { status: 'Active' } }),
+    prisma.attendance.findMany({
+      where: { date: day, student: { status: 'Active' } },
+      select: { studentId: true, status: true, method: true, markedAt: true },
+      orderBy: { markedAt: 'asc' },
+    }),
+  ]);
 
   const byStudent = new Map();
   for (const r of dayRows) {
@@ -523,6 +647,7 @@ async function loadCheckInMap({ from, to, studentIds } = {}) {
       studentId: true,
       date: true,
       status: true,
+      sessionSlot: true,
       markedAt: true,
       method: true,
       source: true,
@@ -531,7 +656,7 @@ async function loadCheckInMap({ from, to, studentIds } = {}) {
       gpsAccuracy: true,
       session: { select: { sessionCode: true } },
     },
-    orderBy: { markedAt: 'asc' },
+    orderBy: [{ sessionSlot: 'desc' }, { markedAt: 'asc' }],
   });
 
   const map = new Map();
@@ -567,86 +692,47 @@ export async function buildAttendanceMatrix(input = {}, { now = new Date() } = {
   const period = resolvePeriodFilter(input, now);
   const window = await resolveCalcWindow(period, { now });
   const { from, to } = window;
-  const trainingDayKeys = await getTrainingDayKeys();
   const search = input.search || input.student || '';
-  const statusFilter = normalizeAttendanceStatus(input.status) || String(input.status || 'all').toLowerCase();
-  const methodFilter = String(input.method || input.sourceMethod || 'all').toUpperCase();
-  const locationFilter = String(input.location || input.locationVerified || 'all').toLowerCase();
+  const { statusFilter, methodFilter, locationFilter } = matrixFilterInput(input);
 
-  const students = await loadApplicableStudents({ from, to, search });
+  const [trainingDayKeys, students] = await Promise.all([
+    getTrainingDayKeys(),
+    loadApplicableStudents({ from, to, search }),
+  ]);
   const dates = listTrainingDates(from, to, trainingDayKeys);
   const studentIds = students.map((s) => s.id);
-  const checkInMap = await loadCheckInMap({ from, to, studentIds });
+  const [checkInMap, rawScanRecords] = await Promise.all([
+    loadCheckInMap({ from, to, studentIds }),
+    prisma.attendance.count({ where: attendanceScanWhere({ from, to, studentIds, search }) }),
+  ]);
 
-  const rows = [];
-  for (const day of dates) {
-    const dayKeyStr = dateKey(day);
-    for (const student of students) {
-      const join = toDateOnly(student.joiningDate) || from;
-      if (join.getTime() > day.getTime()) continue;
-
-      const hit = checkInMap.get(`${student.id}|${dayKeyStr}`);
-      const statusKey = hit?.statusKey || 'absent';
-      const statusLabel = hit?.statusLabel || attendanceStatusLabel('absent');
-      if (statusFilter !== 'all' && statusKey !== statusFilter) continue;
-      if (methodFilter && methodFilter !== 'ALL') {
-        if (!hit || String(hit.method || 'QR').toUpperCase() !== methodFilter) continue;
-      }
-      if (locationFilter === 'verified') {
-        if (!hit || hit.locationVerified !== true) continue;
-      }
-      if (locationFilter === 'not_verified' || locationFilter === 'unverified') {
-        if (!hit || hit.locationVerified === true) continue;
-      }
-
-      const isPresent = statusKey === 'present';
-      rows.push({
-        id: hit?.id || null,
-        studentId: student.id,
-        registrationId: student.registrationNumber,
-        studentName: student.fullName,
-        fatherName: student.fatherName || '',
-        batch: student.batch || '',
-        membershipType: student.membershipType || '',
-        mobileNumber: student.mobileNumber || '',
-        date: dayKeyStr,
-        dateDisplay: formatIstDateDisplay(day),
-        status: statusLabel,
-        statusKey,
-        statusLabel,
-        checkIn: isPresent ? hit?.checkIn || '' : hit?.checkIn || '',
-        checkOut: 0,
-        markedAt: hit?.markedAt || null,
-        sessionCode: hit?.sessionCode || '',
-        method: hit?.method || null,
-        source: hit?.source || null,
-        sourceLabel: hit ? hit.sourceLabel : '—',
-        distanceFromAkhada: hit?.distanceFromAkhada ?? null,
-        locationVerified: hit?.locationVerified ?? null,
-        gpsAccuracy: hit?.gpsAccuracy ?? null,
-        locationLabel:
-          !isPresent
-            ? '—'
-            : hit?.locationVerified === true
-              ? 'Verified'
-              : hit?.locationVerified === false
-                ? 'Not Verified'
-                : '—',
-        distanceLabel:
-          !isPresent || hit?.distanceFromAkhada == null
-            ? '—'
-            : `${Math.round(hit.distanceFromAkhada)}m`,
-      });
-    }
-  }
-
-  // Newest dates first for UI; Excel export can re-sort ascending
-  rows.sort((a, b) => {
-    if (a.date === b.date) return a.studentName.localeCompare(b.studentName);
-    return a.date < b.date ? 1 : -1;
+  const rows = collectMatrixRows({
+    students,
+    dates,
+    from,
+    checkInMap,
+    statusFilter,
+    methodFilter,
+    locationFilter,
   });
-
-  const summary = await calculateAttendanceSummary(input, { now });
+  const statusMap = statusMapFromCheckInMap(checkInMap);
+  const studentRows = students.map((s) =>
+    calcStudentRow(s, {
+      from,
+      to,
+      trainingDayKeys,
+      statusByDate: statusMap.get(s.id),
+    })
+  );
+  const summary = buildAttendanceSummaryResult({
+    period,
+    window,
+    from,
+    to,
+    trainingDayKeys,
+    studentRows,
+    rawScanRecords,
+  });
 
   return {
     period: summary.period,
@@ -715,19 +801,36 @@ export async function getStudentAttendanceHistory(studentId, input = {}, { now =
   });
   if (!student) return null;
 
-  const matrix = await buildAttendanceMatrix(
-    {
-      ...input,
-      search: student.registrationNumber,
-    },
-    { now }
-  );
-  const rows = matrix.rows.filter((r) => r.studentId === studentId);
+  const period = resolvePeriodFilter(input, now);
+  const { statusFilter, methodFilter, locationFilter } = matrixFilterInput(input);
+  const [window, trainingDayKeys] = await Promise.all([
+    resolveCalcWindow(period, { now }),
+    getTrainingDayKeys(),
+  ]);
+  const { from, to } = window;
+  const year = Number(input.year) || Number(period.year);
+  const month = Number(input.month) || Number(period.month);
+  const dates = listTrainingDates(from, to, trainingDayKeys);
+
+  const [checkInMap, monthlySessions] = await Promise.all([
+    loadCheckInMap({ from, to, studentIds: [studentId] }),
+    year && month ? getStudentMonthlySessionGrid(studentId, { year, month, now }) : Promise.resolve(null),
+  ]);
+
+  const rows = collectMatrixRows({
+    students: [student],
+    dates,
+    from,
+    checkInMap,
+    statusFilter,
+    methodFilter,
+    locationFilter,
+  });
   const statusByDate = new Map(rows.map((r) => [r.date, r.statusKey]));
   const calc = calcStudentRow(student, {
-    from: parseDateOnly(matrix.period.from),
-    to: parseDateOnly(matrix.period.to),
-    trainingDayKeys: await getTrainingDayKeys(),
+    from,
+    to,
+    trainingDayKeys,
     statusByDate,
   });
 
@@ -742,6 +845,92 @@ export async function getStudentAttendanceHistory(studentId, input = {}, { now =
     },
     summary: calc,
     history: rows,
-    period: matrix.period,
+    monthlySessions,
+    period: {
+      ...period,
+      from: dateKey(from),
+      to: dateKey(to),
+      cappedToToday: window.cappedToToday,
+    },
+  };
+}
+
+const SESSION_STATUSES = ['present', 'absent', 'leave', 'medical_leave', 'competition_leave'];
+
+function emptySessionCounts() {
+  return SESSION_STATUSES.reduce((acc, key) => {
+    acc[key] = 0;
+    return acc;
+  }, {});
+}
+
+function bumpCount(counts, status) {
+  const key = normalizeAttendanceStatus(status);
+  if (key && counts[key] != null) counts[key] += 1;
+}
+
+/** Calendar-month morning/evening grid from stored attendance rows (no inferred absents). */
+export async function getStudentMonthlySessionGrid(studentId, { year, month, now = new Date() } = {}) {
+  const { from, to } = monthBounds(year, month);
+  const daysInMonth = to.getUTCDate();
+  const rows = await prisma.attendance.findMany({
+    where: {
+      studentId,
+      date: { gte: from, lte: to },
+    },
+    select: {
+      id: true,
+      date: true,
+      status: true,
+      sessionSlot: true,
+      markedAt: true,
+    },
+    orderBy: [{ date: 'asc' }, { sessionSlot: 'asc' }],
+  });
+
+  const byDate = new Map();
+  for (const row of rows) {
+    const key = dateKey(row.date);
+    if (!byDate.has(key)) byDate.set(key, { morning: null, evening: null });
+    const slot = String(row.sessionSlot || 'morning').toLowerCase() === 'evening' ? 'evening' : 'morning';
+    const statusKey = normalizeAttendanceStatus(row.status) || 'present';
+    byDate.get(key)[slot] = {
+      id: row.id,
+      status: statusKey,
+      statusLabel: attendanceStatusLabel(statusKey),
+      markedAt: row.markedAt,
+    };
+  }
+
+  const morning = emptySessionCounts();
+  const evening = emptySessionCounts();
+  const days = [];
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = dateKey(new Date(Date.UTC(Number(year), Number(month) - 1, day)));
+    const slots = byDate.get(date) || { morning: null, evening: null };
+    if (slots.morning) bumpCount(morning, slots.morning.status);
+    if (slots.evening) bumpCount(evening, slots.evening.status);
+    days.push({
+      day,
+      date,
+      morning: slots.morning,
+      evening: slots.evening,
+    });
+  }
+
+  const combined = emptySessionCounts();
+  for (const key of SESSION_STATUSES) {
+    combined[key] = morning[key] + evening[key];
+  }
+
+  return {
+    year: Number(year),
+    month: Number(month),
+    daysInMonth,
+    from: dateKey(from),
+    to: dateKey(to),
+    days,
+    totals: { morning, evening, combined },
+    hasRecords: rows.length > 0,
   };
 }

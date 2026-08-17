@@ -160,36 +160,24 @@ function calcCoachRow(coach, { from, to, trainingDayKeys, presentDates }) {
   };
 }
 
-export async function calculateCoachAttendanceSummary(input = {}, { now = new Date() } = {}) {
-  const period = resolvePeriodFilter(input, now);
-  const window = await resolveCoachCalcWindow(period, { now });
-  const { from, to } = window;
-  const trainingDayKeys = await getTrainingDayKeys();
-  const search = input.search || input.coach || '';
-  const coaches = await loadApplicableCoaches({ from, to, search });
-  const presentMap = await loadCoachPresentMap({
-    from,
-    to,
-    coachIds: coaches.map((c) => c.id),
-  });
-  const coachRows = coaches.map((c) =>
-    calcCoachRow(c, { from, to, trainingDayKeys, presentDates: presentMap.get(c.id) })
-  );
-
+function buildCoachSummaryResult({
+  period,
+  window,
+  from,
+  to,
+  trainingDayKeys,
+  coachRows,
+  rawScanRecords,
+}) {
   const trainingDaysCalendar = countTrainingDates(from, to, trainingDayKeys);
   const expectedCoachDays = coachRows.reduce((s, r) => s + r.trainingDays, 0);
   const presentCoachDays = coachRows.reduce((s, r) => s + r.presentDays, 0);
   const absentCoachDays = Math.max(0, expectedCoachDays - presentCoachDays);
-  const coachIds = coaches.map((c) => c.id);
-  const rawWhere = { date: { gte: from, lte: to } };
-  if (coachIds.length) rawWhere.coachId = { in: coachIds };
-  const rawScanRecords = await prisma.coachAttendance.count({ where: rawWhere });
-
   return {
     period: { ...period, from: dateKey(from), to: dateKey(to), cappedToToday: window.cappedToToday },
     summary: {
-      totalCoaches: coaches.length,
-      totalStudents: coaches.length,
+      totalCoaches: coachRows.length,
+      totalStudents: coachRows.length,
       trainingDays: trainingDaysCalendar,
       expectedCoachDays,
       presentCoachDays,
@@ -209,24 +197,56 @@ export async function calculateCoachAttendanceSummary(input = {}, { now = new Da
   };
 }
 
+export async function calculateCoachAttendanceSummary(input = {}, { now = new Date() } = {}) {
+  const period = resolvePeriodFilter(input, now);
+  const window = await resolveCoachCalcWindow(period, { now });
+  const { from, to } = window;
+  const search = input.search || input.coach || '';
+  const [trainingDayKeys, coaches] = await Promise.all([
+    getTrainingDayKeys(),
+    loadApplicableCoaches({ from, to, search }),
+  ]);
+  const coachIds = coaches.map((c) => c.id);
+  const rawWhere = { date: { gte: from, lte: to } };
+  if (coachIds.length) rawWhere.coachId = { in: coachIds };
+  const [presentMap, rawScanRecords] = await Promise.all([
+    loadCoachPresentMap({ from, to, coachIds }),
+    prisma.coachAttendance.count({ where: rawWhere }),
+  ]);
+  const coachRows = coaches.map((c) =>
+    calcCoachRow(c, { from, to, trainingDayKeys, presentDates: presentMap.get(c.id) })
+  );
+
+  return buildCoachSummaryResult({
+    period,
+    window,
+    from,
+    to,
+    trainingDayKeys,
+    coachRows,
+    rawScanRecords,
+  });
+}
+
 export async function calculateTodayCoachStats({ date, now = new Date() } = {}) {
   let day;
   if (date instanceof Date && !Number.isNaN(date.getTime())) day = toDateOnly(date);
   else if (date) day = parseDateOnly(date);
   else day = attendanceDateFromInstant(now);
 
-  const totalCoaches = await prisma.coach.count({ where: { status: 'Active' } });
-  const presentRows = await prisma.coachAttendance.groupBy({
-    by: ['coachId'],
-    where: { date: day, status: 'present', coach: { status: 'Active' } },
-  });
+  const [totalCoaches, presentRows, methodRows] = await Promise.all([
+    prisma.coach.count({ where: { status: 'Active' } }),
+    prisma.coachAttendance.groupBy({
+      by: ['coachId'],
+      where: { date: day, status: 'present', coach: { status: 'Active' } },
+    }),
+    prisma.coachAttendance.findMany({
+      where: { date: day, status: 'present', coach: { status: 'Active' } },
+      select: { coachId: true, method: true },
+    }),
+  ]);
   const present = presentRows.length;
   const absent = Math.max(0, totalCoaches - present);
-
-  const methodRows = await prisma.coachAttendance.findMany({
-    where: { date: day, status: 'present', coach: { status: 'Active' } },
-    select: { coachId: true, method: true },
-  });
   const seen = new Set();
   let qrAttendance = 0;
   let biometricAttendance = 0;
@@ -312,23 +332,27 @@ async function loadCoachCheckInMap({ from, to, coachIds } = {}) {
   return map;
 }
 
-export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() } = {}) {
-  const period = resolvePeriodFilter(input, now);
-  const window = await resolveCoachCalcWindow(period, { now });
-  const { from, to } = window;
-  const trainingDayKeys = await getTrainingDayKeys();
-  const search = input.search || input.coach || '';
-  const statusFilter = String(input.status || 'all').toLowerCase();
-  const methodFilter = String(input.method || input.sourceMethod || 'all').toUpperCase();
-  const locationFilter = String(input.location || input.locationVerified || 'all').toLowerCase();
-  const coaches = await loadApplicableCoaches({ from, to, search });
-  const dates = listTrainingDates(from, to, trainingDayKeys);
-  const checkInMap = await loadCoachCheckInMap({
-    from,
-    to,
-    coachIds: coaches.map((c) => c.id),
-  });
+function presentMapFromCheckIn(checkInMap) {
+  const map = new Map();
+  for (const compound of checkInMap.keys()) {
+    const sep = compound.indexOf('|');
+    const coachId = compound.slice(0, sep);
+    const date = compound.slice(sep + 1);
+    if (!map.has(coachId)) map.set(coachId, new Set());
+    map.get(coachId).add(date);
+  }
+  return map;
+}
 
+function collectCoachMatrixRows({
+  coaches,
+  dates,
+  from,
+  checkInMap,
+  statusFilter,
+  methodFilter,
+  locationFilter,
+}) {
   const rows = [];
   for (const day of dates) {
     const dayKeyStr = dateKey(day);
@@ -387,13 +411,56 @@ export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() 
       });
     }
   }
-
   rows.sort((a, b) => {
     if (a.date === b.date) return a.studentName.localeCompare(b.studentName);
     return a.date < b.date ? 1 : -1;
   });
+  return rows;
+}
 
-  const summary = await calculateCoachAttendanceSummary(input, { now });
+export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() } = {}) {
+  const period = resolvePeriodFilter(input, now);
+  const window = await resolveCoachCalcWindow(period, { now });
+  const { from, to } = window;
+  const search = input.search || input.coach || '';
+  const statusFilter = String(input.status || 'all').toLowerCase();
+  const methodFilter = String(input.method || input.sourceMethod || 'all').toUpperCase();
+  const locationFilter = String(input.location || input.locationVerified || 'all').toLowerCase();
+  const [trainingDayKeys, coaches] = await Promise.all([
+    getTrainingDayKeys(),
+    loadApplicableCoaches({ from, to, search }),
+  ]);
+  const dates = listTrainingDates(from, to, trainingDayKeys);
+  const coachIds = coaches.map((c) => c.id);
+  const rawWhere = { date: { gte: from, lte: to } };
+  if (coachIds.length) rawWhere.coachId = { in: coachIds };
+  const [checkInMap, rawScanRecords] = await Promise.all([
+    loadCoachCheckInMap({ from, to, coachIds }),
+    prisma.coachAttendance.count({ where: rawWhere }),
+  ]);
+
+  const rows = collectCoachMatrixRows({
+    coaches,
+    dates,
+    from,
+    checkInMap,
+    statusFilter,
+    methodFilter,
+    locationFilter,
+  });
+  const presentMap = presentMapFromCheckIn(checkInMap);
+  const coachRows = coaches.map((c) =>
+    calcCoachRow(c, { from, to, trainingDayKeys, presentDates: presentMap.get(c.id) })
+  );
+  const summary = buildCoachSummaryResult({
+    period,
+    window,
+    from,
+    to,
+    trainingDayKeys,
+    coachRows,
+    rawScanRecords,
+  });
   return {
     period: summary.period,
     summary: summary.summary,
@@ -409,15 +476,30 @@ export { paginateRows };
 export async function getCoachAttendanceHistory(coachId, input = {}, { now = new Date() } = {}) {
   const coach = await prisma.coach.findUnique({ where: { id: coachId }, select: COACH_SELECT });
   if (!coach) return null;
-  const matrix = await buildCoachAttendanceMatrix(
-    { ...input, search: coach.coachCode },
-    { now }
-  );
-  const rows = matrix.rows.filter((r) => r.coachId === coachId);
+  const period = resolvePeriodFilter(input, now);
+  const statusFilter = String(input.status || 'all').toLowerCase();
+  const methodFilter = String(input.method || input.sourceMethod || 'all').toUpperCase();
+  const locationFilter = String(input.location || input.locationVerified || 'all').toLowerCase();
+  const [window, trainingDayKeys] = await Promise.all([
+    resolveCoachCalcWindow(period, { now }),
+    getTrainingDayKeys(),
+  ]);
+  const { from, to } = window;
+  const dates = listTrainingDates(from, to, trainingDayKeys);
+  const checkInMap = await loadCoachCheckInMap({ from, to, coachIds: [coachId] });
+  const rows = collectCoachMatrixRows({
+    coaches: [coach],
+    dates,
+    from,
+    checkInMap,
+    statusFilter,
+    methodFilter,
+    locationFilter,
+  });
   const calc = calcCoachRow(coach, {
-    from: parseDateOnly(matrix.period.from),
-    to: parseDateOnly(matrix.period.to),
-    trainingDayKeys: await getTrainingDayKeys(),
+    from,
+    to,
+    trainingDayKeys,
     presentDates: new Set(rows.filter((r) => r.status === 'Present').map((r) => r.date)),
   });
   return {
@@ -437,6 +519,11 @@ export async function getCoachAttendanceHistory(coachId, input = {}, { now = new
     },
     summary: calc,
     history: rows,
-    period: matrix.period,
+    period: {
+      ...period,
+      from: dateKey(from),
+      to: dateKey(to),
+      cappedToToday: window.cappedToToday,
+    },
   };
 }

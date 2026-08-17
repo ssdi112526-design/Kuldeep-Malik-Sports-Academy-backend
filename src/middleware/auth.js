@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
-import { getUserPermissions, loadUserWithRole, serializeUser } from '../utils/rbac.js';
+import { loadAuthContext, serializeUser } from '../utils/rbac.js';
 
 export const protect = asyncHandler(async (req, res, next) => {
   let token;
@@ -16,13 +16,12 @@ export const protect = asyncHandler(async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await loadUserWithRole(decoded.id);
+    const { user, permissions } = await loadAuthContext(decoded.id);
 
     if (!user || !user.isActive) {
       throw new ApiError(401, 'User not found or inactive.');
     }
 
-    const permissions = await getUserPermissions(user);
     req.user = serializeUser(user, permissions);
     req.permissions = permissions;
     next();

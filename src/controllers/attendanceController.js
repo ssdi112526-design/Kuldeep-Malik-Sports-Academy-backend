@@ -28,7 +28,7 @@ import {
   attendanceStatusLabel,
   normalizeAttendanceStatus,
 } from '../constants/attendanceStatus.js';
-import { upsertStudentAttendanceStatus } from '../services/attendanceMarkService.js';
+import { upsertStudentAttendanceStatus, inferAttendanceSessionSlot } from '../services/attendanceMarkService.js';
 
 /** One-time QR lifetime in seconds (default 60). */
 const QR_TTL_SECONDS = Math.min(
@@ -369,30 +369,26 @@ export const getAttendanceStats = asyncHandler(async (req, res) => {
 });
 
 export const listAvailableAttendanceMonths = asyncHandler(async (_req, res) => {
-  const rows = await prisma.attendance.findMany({
-    select: { date: true },
-    distinct: ['date'],
-    orderBy: { date: 'desc' },
-  });
-  const map = new Map();
-  for (const r of rows) {
-    const d = new Date(r.date);
+  const rows = await prisma.$queryRaw`
+    SELECT DISTINCT date_trunc('month', date)::date AS month
+    FROM attendance
+    ORDER BY month DESC
+  `;
+  const months = (rows || []).map((r) => {
+    const d = new Date(r.month);
     const y = d.getUTCFullYear();
     const m = d.getUTCMonth() + 1;
-    const key = `${y}-${String(m).padStart(2, '0')}`;
-    if (!map.has(key)) {
-      map.set(key, {
-        year: y,
-        month: m,
-        label: new Intl.DateTimeFormat('en-IN', {
-          month: 'long',
-          year: 'numeric',
-          timeZone: 'UTC',
-        }).format(d),
-      });
-    }
-  }
-  res.json({ success: true, data: { months: [...map.values()] } });
+    return {
+      year: y,
+      month: m,
+      label: new Intl.DateTimeFormat('en-IN', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }).format(d),
+    };
+  });
+  res.json({ success: true, data: { months } });
 });
 
 export const listAttendanceRecords = asyncHandler(async (req, res) => {
@@ -766,14 +762,19 @@ export const scanAttendance = asyncHandler(async (req, res) => {
   const tokenHash = hashToken(token);
   const markedAt = new Date();
   const date = attendanceDateFromInstant(markedAt);
+  const sessionSlot = inferAttendanceSessionSlot(markedAt);
 
-  // Reject duplicate daily attendance BEFORE consuming the QR
+  // Reject duplicate attendance for this session slot BEFORE consuming the QR
   const alreadyToday = await prisma.attendance.findFirst({
-    where: { studentId: student.id, date },
+    where: { studentId: student.id, date, sessionSlot },
     select: { id: true },
   });
   if (alreadyToday) {
-    throw new ApiError(409, 'Your attendance for today has already been marked.', 'ATTENDANCE_ALREADY_MARKED');
+    throw new ApiError(
+      409,
+      `Your ${sessionSlot} attendance for today has already been marked.`,
+      'ATTENDANCE_ALREADY_MARKED'
+    );
   }
 
   const existingSession = await prisma.attendanceSession.findUnique({ where: { id: sessionId } });
@@ -824,13 +825,13 @@ export const scanAttendance = asyncHandler(async (req, res) => {
     const core = await prisma.$transaction(
       async (tx) => {
         const alreadyInTx = await tx.attendance.findFirst({
-          where: { studentId: student.id, date },
+          where: { studentId: student.id, date, sessionSlot },
           select: { id: true },
         });
         if (alreadyInTx) {
           throw new ApiError(
             409,
-            'Your attendance for today has already been marked.',
+            `Your ${sessionSlot} attendance for today has already been marked.`,
             'ATTENDANCE_ALREADY_MARKED'
           );
         }
@@ -874,6 +875,7 @@ export const scanAttendance = asyncHandler(async (req, res) => {
               date,
               markedAt,
               status: 'present',
+              sessionSlot,
               source: 'live',
               method: 'QR',
               latitude: geo.latitude,
@@ -996,6 +998,7 @@ export const markAttendanceStatus = asyncHandler(async (req, res) => {
     studentId,
     date,
     status,
+    sessionSlot: req.body.sessionSlot || req.body.session,
     markedAt: req.body.markedAt ? new Date(req.body.markedAt) : new Date(),
     method: 'MANUAL',
   });

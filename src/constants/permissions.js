@@ -32,6 +32,7 @@ export const MENU_DEFINITIONS = [
   { menu: 'programs', label: 'Programs', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'gallery', label: 'Gallery', actions: ['view', 'create', 'edit', 'delete', 'upload', 'download', 'publish'] },
   { menu: 'athletes', label: 'Athletes / Wrestlers', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
+  { menu: 'legacy_members', label: 'Legacy Members', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'facilities', label: 'Facilities', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'features', label: 'Features', actions: ['view', 'create', 'edit', 'delete', 'upload'] },
   { menu: 'videos', label: 'Videos', actions: ['view', 'create', 'edit', 'delete', 'upload', 'publish'] },
@@ -90,6 +91,7 @@ export function getSystemRolePermissionKeys(allKeys) {
     'videos',
     'gallery',
     'athletes',
+    'legacy_members',
     'features',
   ];
   const coach = allKeys.filter((k) => coachMenus.some((m) => k.startsWith(`${m}.`)));
@@ -99,6 +101,7 @@ export function getSystemRolePermissionKeys(allKeys) {
     'programs',
     'gallery',
     'athletes',
+    'legacy_members',
     'facilities',
     'features',
     'videos',

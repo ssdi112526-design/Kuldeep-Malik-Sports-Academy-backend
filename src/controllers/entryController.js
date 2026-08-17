@@ -721,21 +721,23 @@ export const deleteStudent = asyncHandler(async (req, res) => {
 });
 
 export const getStudentStats = asyncHandler(async (_req, res) => {
-  const [total, active, inactive, suspended, todayAdmissions] = await Promise.all([
-    prisma.student.count(),
-    prisma.student.count({ where: { status: 'Active' } }),
-    prisma.student.count({ where: { status: 'Inactive' } }),
-    prisma.student.count({ where: { status: 'Suspended' } }),
+  const [groups, todayAdmissions] = await Promise.all([
+    prisma.student.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+    }),
     prisma.student.count({ where: { joiningDate: { gte: new Date(new Date().toDateString()) } } }),
   ]);
+  const countBy = Object.fromEntries(groups.map((g) => [g.status, g._count._all]));
+  const total = groups.reduce((sum, g) => sum + g._count._all, 0);
 
   res.json({
     success: true,
     data: {
       totalStudents: total,
-      activeStudents: active,
-      inactiveStudents: inactive,
-      suspendedStudents: suspended,
+      activeStudents: countBy.Active || 0,
+      inactiveStudents: countBy.Inactive || 0,
+      suspendedStudents: countBy.Suspended || 0,
       todayAdmissions,
     },
   });
@@ -1452,13 +1454,21 @@ export const deleteCoach = asyncHandler(async (req, res) => {
 });
 
 export const getCoachStats = asyncHandler(async (_req, res) => {
-  const [total, active, inactive, suspended] = await Promise.all([
-    prisma.coach.count(),
-    prisma.coach.count({ where: { status: 'Active' } }),
-    prisma.coach.count({ where: { status: 'Inactive' } }),
-    prisma.coach.count({ where: { status: 'Suspended' } }),
-  ]);
-  res.json({ success: true, data: { totalCoaches: total, activeCoaches: active, inactiveCoaches: inactive, suspendedCoaches: suspended } });
+  const groups = await prisma.coach.groupBy({
+    by: ['status'],
+    _count: { _all: true },
+  });
+  const countBy = Object.fromEntries(groups.map((g) => [g.status, g._count._all]));
+  const total = groups.reduce((sum, g) => sum + g._count._all, 0);
+  res.json({
+    success: true,
+    data: {
+      totalCoaches: total,
+      activeCoaches: countBy.Active || 0,
+      inactiveCoaches: countBy.Inactive || 0,
+      suspendedCoaches: countBy.Suspended || 0,
+    },
+  });
 });
 
 export const exportCoaches = asyncHandler(async (req, res) => {

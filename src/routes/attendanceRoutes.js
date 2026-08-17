@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { protect, requirePermission, requireStudent, requireAdminAccess } from '../middleware/auth.js';
+import { protect, requirePermission, requireAnyPermission, requireStudent, requireAdminAccess } from '../middleware/auth.js';
 import {
   generateAttendanceQr,
   getActiveAttendanceQr,
@@ -22,6 +22,11 @@ import {
 const router = Router();
 
 const adminView = [protect, requireAdminAccess, requirePermission('attendance.view')];
+const studentHistoryView = [
+  protect,
+  requireAdminAccess,
+  requireAnyPermission('attendance.view', 'reports.view', 'students.view'),
+];
 const adminCreate = [protect, requireAdminAccess, requirePermission('attendance.create')];
 const adminEdit = [protect, requireAdminAccess, requirePermission('attendance.edit')];
 const adminExport = [protect, requireAdminAccess, requirePermission('attendance.export')];
@@ -31,7 +36,7 @@ router.get('/admin/attendance/months', ...adminView, listAvailableAttendanceMont
 router.get('/admin/attendance/records', ...adminView, listAttendanceRecords);
 router.get('/admin/attendance/roster', ...adminView, listDailyRoster);
 router.get('/admin/attendance/summary/students', ...adminView, getStudentAttendanceSummary);
-router.get('/admin/attendance/students/:studentId/history', ...adminView, getStudentHistory);
+router.get('/admin/attendance/students/:studentId/history', ...studentHistoryView, getStudentHistory);
 router.get('/admin/attendance/records/:id', ...adminView, getAttendanceRecord);
 router.get('/admin/attendance/sessions', ...adminView, listAttendanceSessions);
 router.get('/admin/attendance/qr/active', ...adminView, getActiveAttendanceQr);

@@ -46,6 +46,16 @@ import {
   athleteCreateValidation,
   athleteUpdateValidation,
   athleteIdValidation,
+  listLegacyMembersPublic,
+  listLegacyMembersAdmin,
+  getLegacyMemberAdmin,
+  createLegacyMember,
+  updateLegacyMember,
+  deleteLegacyMember,
+  legacyMemberListValidation,
+  legacyMemberCreateValidation,
+  legacyMemberUpdateValidation,
+  legacyMemberIdValidation,
   listFeaturesPublic,
   listFeaturesAdmin,
   createFeature,
@@ -92,6 +102,11 @@ const runUpload = (uploader) => withMediaBlobBackup(uploader);
 const programsRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('programs'))];
 const galleryRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('gallery'))];
 const athletesRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('athletes'))];
+const legacyMembersRead = [
+  protect,
+  requireAdminAccess,
+  requireAnyPermission(...modulePermissionKeys('legacy_members')),
+];
 const facilitiesRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('facilities'))];
 const featuresRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('features'))];
 const membershipRead = [protect, requireAdminAccess, requireAnyPermission(...modulePermissionKeys('membership'))];
@@ -105,6 +120,7 @@ const dashboardRead = [
     ...modulePermissionKeys('programs'),
     ...modulePermissionKeys('gallery'),
     ...modulePermissionKeys('athletes'),
+    ...modulePermissionKeys('legacy_members'),
     ...modulePermissionKeys('facilities'),
     ...modulePermissionKeys('features'),
     ...modulePermissionKeys('membership'),
@@ -117,6 +133,7 @@ const dashboardRead = [
 router.get('/programs', listProgramsPublic);
 router.get('/gallery', listGalleryPublic);
 router.get('/athletes', listAthletesPublic);
+router.get('/legacy-members', listLegacyMembersPublic);
 router.get('/facilities', listFacilitiesPublic);
 router.get('/features', listFeaturesPublic);
 router.get('/membership-plans', listMembershipPlansPublic);
@@ -222,6 +239,51 @@ router.delete(
   ...athleteIdValidation,
   validate,
   deleteAthlete
+);
+
+/* Admin Legacy Members (Prestigious Members) */
+router.get(
+  '/admin/legacy-members',
+  ...legacyMembersRead,
+  ...legacyMemberListValidation,
+  validate,
+  listLegacyMembersAdmin
+);
+router.get(
+  '/admin/legacy-members/:id',
+  ...legacyMembersRead,
+  ...legacyMemberIdValidation,
+  validate,
+  getLegacyMemberAdmin
+);
+router.post(
+  '/admin/legacy-members',
+  protect,
+  requireAdminAccess,
+  requirePermission('legacy_members.create'),
+  runUpload(uploadSingle),
+  ...legacyMemberCreateValidation,
+  validate,
+  createLegacyMember
+);
+router.put(
+  '/admin/legacy-members/:id',
+  protect,
+  requireAdminAccess,
+  requirePermission('legacy_members.edit'),
+  runUpload(uploadSingle),
+  ...legacyMemberUpdateValidation,
+  validate,
+  updateLegacyMember
+);
+router.delete(
+  '/admin/legacy-members/:id',
+  protect,
+  requireAdminAccess,
+  requirePermission('legacy_members.delete'),
+  ...legacyMemberIdValidation,
+  validate,
+  deleteLegacyMember
 );
 
 /* Admin Facilities */

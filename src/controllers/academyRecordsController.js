@@ -34,12 +34,15 @@ function publicAchievementShape(item) {
     (item.tournament?.eventDate ? new Date(item.tournament.eventDate).getUTCFullYear() : null);
   const displayName =
     String(item.playerName || '').trim() || item.student?.fullName || 'Player';
+  const normalizedLevel = normalizeAchievementLevel(item.level || item.achievementType || item.result);
   return {
     id: item.id,
     _id: item.id,
     title: item.title,
     description: item.description || null,
+    level: normalizedLevel,
     achievementType: item.achievementType || null,
+    competition: item.tournament?.name || item.tournamentName || null,
     tournamentName: item.tournament?.name || item.tournamentName || null,
     tournamentId: item.tournamentId || null,
     location: item.tournament?.location || null,
@@ -68,6 +71,57 @@ function parseShowOnWebsite(value, fallback = true) {
   return fallback;
 }
 
+const ACHIEVEMENT_LEVELS = ['asian', 'national', 'state', 'district'];
+
+function normalizeAchievementLevel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (ACHIEVEMENT_LEVELS.includes(lower)) return lower;
+  if (lower.includes('asian')) return 'asian';
+  if (lower.includes('national')) return 'national';
+  if (lower.includes('state')) return 'state';
+  if (lower.includes('district')) return 'district';
+  return null;
+}
+
+function buildLevelTally() {
+  return ACHIEVEMENT_LEVELS.reduce((acc, level) => {
+    acc[level] = { gold: 0, silver: 0, bronze: 0 };
+    return acc;
+  }, {});
+}
+
+function buildPublicAchievementSummary(items) {
+  const summary = {
+    total: 0,
+    gold: 0,
+    silver: 0,
+    bronze: 0,
+    levels: buildLevelTally(),
+  };
+
+  for (const item of items) {
+    const medal = normalizeMedal(item.medal);
+    const level = normalizeAchievementLevel(item.level || item.achievementType || item.result);
+    if (medal === 'Gold') {
+      summary.gold += 1;
+      summary.total += 1;
+      if (level) summary.levels[level].gold += 1;
+    } else if (medal === 'Silver') {
+      summary.silver += 1;
+      summary.total += 1;
+      if (level) summary.levels[level].silver += 1;
+    } else if (medal === 'Bronze') {
+      summary.bronze += 1;
+      summary.total += 1;
+      if (level) summary.levels[level].bronze += 1;
+    }
+  }
+
+  return summary;
+}
+
 async function getLinkedStudentIdsForParent(userId) {
   const profile = await prisma.parentProfile.findUnique({
     where: { userId },
@@ -92,6 +146,8 @@ export const playerAchievementListValidation = [
   query('studentId').optional().isUUID(),
   query('tournamentId').optional().isUUID(),
   query('medal').optional().trim().isLength({ max: 40 }),
+  query('level').optional().trim().isLength({ max: 40 }),
+  query('status').optional().trim().isLength({ max: 20 }),
 ];
 
 export const listPlayerAchievements = asyncHandler(async (req, res) => {
@@ -101,17 +157,27 @@ export const listPlayerAchievements = asyncHandler(async (req, res) => {
   const studentId = req.query.studentId;
   const medal = req.query.medal ? normalizeMedal(req.query.medal) : null;
   const tournamentId = req.query.tournamentId;
+  const level = normalizeAchievementLevel(req.query.level);
+  const status = String(req.query.status || '').trim().toLowerCase();
 
   const where = {
     ...(studentId ? { studentId } : {}),
     ...(tournamentId ? { tournamentId } : {}),
     ...(medal ? { medal: { equals: medal, mode: 'insensitive' } } : {}),
+    ...(level ? { level: { equals: level, mode: 'insensitive' } } : {}),
+    ...(status === 'active'
+      ? { showOnWebsite: true }
+      : status === 'inactive'
+        ? { showOnWebsite: false }
+        : {}),
     ...(search
       ? {
           OR: [
             { title: { contains: search, mode: 'insensitive' } },
             { playerName: { contains: search, mode: 'insensitive' } },
             { tournamentName: { contains: search, mode: 'insensitive' } },
+            { achievementType: { contains: search, mode: 'insensitive' } },
+            { level: { contains: search, mode: 'insensitive' } },
             { student: { fullName: { contains: search, mode: 'insensitive' } } },
             { tournament: { name: { contains: search, mode: 'insensitive' } } },
           ],
@@ -124,7 +190,17 @@ export const listPlayerAchievements = asyncHandler(async (req, res) => {
     prisma.playerAchievement.findMany({
       where,
       include: {
-        student: { select: { id: true, fullName: true, registrationNumber: true, photo: true } },
+        student: {
+          select: {
+            id: true,
+            fullName: true,
+            registrationNumber: true,
+            photo: true,
+            ageCategory: true,
+            weightCategory: true,
+            category: true,
+          },
+        },
         tournament: { select: { id: true, name: true, eventDate: true } },
       },
       orderBy: [{ achievedOn: 'desc' }, { createdAt: 'desc' }],
@@ -133,13 +209,18 @@ export const listPlayerAchievements = asyncHandler(async (req, res) => {
     }),
     prisma.playerAchievement.groupBy({
       by: ['medal'],
+      where,
       _count: { _all: true },
     }),
     prisma.playerAchievement.findMany({
+      where,
       select: { studentId: true, playerName: true },
     }),
     prisma.playerAchievement.findMany({
-      where: { OR: [{ tournamentId: { not: null } }, { tournamentName: { not: null } }] },
+      where: {
+        ...where,
+        OR: [{ tournamentId: { not: null } }, { tournamentName: { not: null } }],
+      },
       select: { tournamentId: true, tournamentName: true },
     }),
   ]);
@@ -172,6 +253,7 @@ export const listPlayerAchievements = asyncHandler(async (req, res) => {
           ...item,
           displayPlayerName:
             String(item.playerName || '').trim() || item.student?.fullName || '—',
+          level: normalizeAchievementLevel(item.level || item.achievementType || item.result),
         }))
       ),
       pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
@@ -188,8 +270,18 @@ export const listPlayerAchievements = asyncHandler(async (req, res) => {
 /** Public website — player achievements (read-only, no sensitive fields) */
 export const listPlayerAchievementsPublic = asyncHandler(async (req, res) => {
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 48));
+  const medal = req.query.medal ? normalizeMedal(req.query.medal) : null;
+  const level = normalizeAchievementLevel(req.query.level);
+  const studentId = req.query.wrestlerId || req.query.studentId;
+
+  const where = {
+    ...(medal ? { medal: { equals: medal, mode: 'insensitive' } } : {}),
+    ...(level ? { level: { equals: level, mode: 'insensitive' } } : {}),
+    ...(studentId ? { studentId: String(studentId) } : {}),
+  };
+
   const items = await prisma.playerAchievement.findMany({
-    where: { showOnWebsite: true },
+    where,
     include: {
       student: {
         select: {
@@ -208,11 +300,14 @@ export const listPlayerAchievementsPublic = asyncHandler(async (req, res) => {
     orderBy: [{ achievedOn: 'desc' }, { year: 'desc' }, { createdAt: 'desc' }],
     take: limit,
   });
+  const achievements = items.map(publicAchievementShape);
+  const summary = buildPublicAchievementSummary(achievements);
 
   res.json({
     success: true,
     data: {
-      achievements: items.map(publicAchievementShape),
+      achievements,
+      summary,
     },
   });
 });
@@ -222,13 +317,34 @@ export const playerAchievementWriteValidation = [
   body('studentId').optional({ checkFalsy: true }).isUUID().withMessage('Invalid player id'),
   body('title').trim().notEmpty().isLength({ max: 200 }),
   body('description').optional({ checkFalsy: true }).trim().isLength({ max: 2000 }),
+  body('level')
+    .optional({ checkFalsy: true })
+    .trim()
+    .custom((value) => {
+      if (!normalizeAchievementLevel(value)) throw new Error('Invalid achievement level');
+      return true;
+    }),
   body('achievementType').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
   body('tournamentId').optional({ checkFalsy: true }).isUUID().withMessage('Invalid tournament'),
   body('tournamentName').optional({ checkFalsy: true }).trim().isLength({ max: 200 }),
-  body('medal').optional({ checkFalsy: true }).trim().isLength({ max: 40 }),
+  body('medal')
+    .optional({ checkFalsy: true })
+    .trim()
+    .custom((value) => {
+      const normalized = normalizeMedal(value);
+      if (!normalized || !['Gold', 'Silver', 'Bronze', 'Other'].includes(normalized)) {
+        throw new Error('Invalid medal');
+      }
+      return true;
+    }),
   body('result').optional({ checkFalsy: true }).trim().isLength({ max: 120 }),
   body('year').optional({ checkFalsy: true }).isInt({ min: 1950, max: 2100 }),
-  body('achievedOn').optional({ checkFalsy: true }),
+  body('achievedOn')
+    .optional({ checkFalsy: true })
+    .custom((value) => {
+      if (!parseDate(value)) throw new Error('Valid date is required');
+      return true;
+    }),
   body('showOnWebsite').optional(),
 ];
 
@@ -249,19 +365,39 @@ export const createPlayerAchievement = asyncHandler(async (req, res) => {
     tournamentName: req.body.tournamentName,
   });
 
+  if (!req.file) {
+    throw new ApiError(400, 'Achievement image is required');
+  }
+
+  const medal = normalizeMedal(req.body.medal);
+  if (!medal || !['Gold', 'Silver', 'Bronze'].includes(medal)) {
+    throw new ApiError(400, 'Valid medal type is required (gold, silver, or bronze)');
+  }
+
+  const level = normalizeAchievementLevel(req.body.level);
+  if (!level) {
+    throw new ApiError(400, 'Achievement level is required');
+  }
+
+  const achievedOn = parseDate(req.body.achievedOn);
+  if (!achievedOn) {
+    throw new ApiError(400, 'Achievement date is required');
+  }
+
   const item = await prisma.playerAchievement.create({
     data: {
       studentId,
       playerName,
       title: req.body.title.trim(),
       description: req.body.description?.trim() || null,
+      level,
       achievementType: req.body.achievementType?.trim() || null,
       tournamentId,
       tournamentName,
-      medal: normalizeMedal(req.body.medal),
+      medal,
       result: req.body.result?.trim() || null,
       year: req.body.year ? Number(req.body.year) : null,
-      achievedOn: parseDate(req.body.achievedOn),
+      achievedOn,
       showOnWebsite: parseShowOnWebsite(req.body.showOnWebsite, true),
       image: req.file ? toPublicPath(req.file.filename) : null,
     },
@@ -317,6 +453,7 @@ export const updatePlayerAchievement = asyncHandler(async (req, res) => {
       }),
       ...(req.body.title !== undefined && { title: req.body.title.trim() }),
       ...(req.body.description !== undefined && { description: req.body.description?.trim() || null }),
+      ...(req.body.level !== undefined && { level: normalizeAchievementLevel(req.body.level) }),
       ...(req.body.achievementType !== undefined && {
         achievementType: req.body.achievementType?.trim() || null,
       }),

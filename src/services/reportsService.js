@@ -68,6 +68,7 @@ export async function getReportsDashboard() {
     studentsForCharts,
     feePaidAgg,
     salaryAgg,
+    attendance,
   ] = await Promise.all([
     prisma.student.count(),
     prisma.student.count({ where: { status: 'Active' } }),
@@ -114,6 +115,7 @@ export async function getReportsDashboard() {
       where: { deletedAt: null },
       _sum: { paidAmount: true, remainingAmount: true },
     }),
+    calculateAttendanceSummary({ period: 'month' }),
   ]);
 
   const medalMap = { Gold: 0, Silver: 0, Bronze: 0, Other: 0 };
@@ -140,8 +142,6 @@ export async function getReportsDashboard() {
     const wc = resolveWeightCategory(s);
     weightCounts[wc] = (weightCounts[wc] || 0) + 1;
   }
-
-  const attendance = await calculateAttendanceSummary({ period: 'month' });
 
   const pendingFees = Number(pendingAgg._sum.remainingDue || 0);
   const paidFees = Number(feePaidAgg._sum.amount || 0);

@@ -12,6 +12,25 @@ import {
 import { attendanceDateFromInstant, dateKey, parseDateOnly } from '../utils/attendanceDate.js';
 
 export const ATTENDANCE_METHODS = ['QR', 'MANUAL', 'BIOMETRIC'];
+export const ATTENDANCE_SESSION_SLOTS = ['morning', 'evening'];
+
+export function normalizeSessionSlot(value, fallback = 'morning') {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'evening' || raw === 'eve' || raw === 'pm') return 'evening';
+  if (raw === 'morning' || raw === 'am') return 'morning';
+  return fallback;
+}
+
+/** Split the academy day in IST: before 14:00 = morning, otherwise evening. */
+export function inferAttendanceSessionSlot(markedAt = new Date()) {
+  const hourStr = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    hour12: false,
+  }).format(new Date(markedAt));
+  const hour = Number(String(hourStr).replace(/[^\d]/g, '').slice(0, 2));
+  return hour < 14 ? 'morning' : 'evening';
+}
 
 /** UI/export label — legacy `live` rows without method → QR */
 export function displayAttendanceSource(row = {}) {
@@ -116,19 +135,20 @@ export async function markStudentPresent({
 
   const at = new Date(markedAt);
   const date = attendanceDateFromInstant(at);
+  const sessionSlot = inferAttendanceSessionSlot(at);
   const methodNorm = normalizeMethod(method);
   if (methodNorm === 'MANUAL') {
     throw new ApiError(403, 'Manual attendance is disabled. Use QR scan or biometric.');
   }
 
   const already = await prisma.attendance.findFirst({
-    where: { studentId: student.id, date },
-    select: { id: true, markedAt: true, method: true, source: true },
+    where: { studentId: student.id, date, sessionSlot },
+    select: { id: true, markedAt: true, method: true, source: true, sessionSlot: true },
   });
   if (already) {
     const err = new ApiError(
       409,
-      `Attendance already marked today at ${formatIstTime(already.markedAt)} (${displayAttendanceSource(already)}).`,
+      `Attendance already marked for the ${sessionSlot} session today at ${formatIstTime(already.markedAt)} (${displayAttendanceSource(already)}).`,
       'ATTENDANCE_ALREADY_MARKED'
     );
     err.existing = already;
@@ -144,6 +164,7 @@ export async function markStudentPresent({
         date,
         markedAt: at,
         status: 'present',
+        sessionSlot,
         source: dataSource === 'demo' ? 'demo' : 'live',
         method: methodNorm,
         deviceId: deviceId || null,
@@ -179,6 +200,7 @@ export async function upsertStudentAttendanceStatus({
   studentId,
   date,
   status,
+  sessionSlot: sessionSlotInput,
   markedAt = new Date(),
   method = 'MANUAL',
   dataSource = 'live',
@@ -203,10 +225,11 @@ export async function upsertStudentAttendanceStatus({
 
   const at = new Date(markedAt);
   const methodNorm = normalizeMethod(method, 'MANUAL');
+  const sessionSlot = normalizeSessionSlot(sessionSlotInput, inferAttendanceSessionSlot(at));
 
   const record = await prisma.attendance.upsert({
     where: {
-      studentId_date: { studentId: student.id, date: day },
+      studentId_date_sessionSlot: { studentId: student.id, date: day, sessionSlot },
     },
     create: {
       studentId: student.id,
@@ -214,6 +237,7 @@ export async function upsertStudentAttendanceStatus({
       date: day,
       markedAt: at,
       status: statusKey,
+      sessionSlot,
       source: dataSource === 'demo' ? 'demo' : 'live',
       method: methodNorm,
     },

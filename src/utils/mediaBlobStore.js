@@ -79,6 +79,10 @@ export async function collectReferencedUploadPaths() {
       const rows = await prisma.athlete.findMany({ select: { image: true } });
       rows.forEach((r) => addPath(paths, r.image));
     }),
+    safe('legacyMembers', async () => {
+      const rows = await prisma.legacyMember.findMany({ select: { image: true } });
+      rows.forEach((r) => addPath(paths, r.image));
+    }),
     safe('programs', async () => {
       const rows = await prisma.program.findMany({ select: { image: true } });
       rows.forEach((r) => addPath(paths, r.image));
@@ -200,6 +204,7 @@ export async function isUploadPathReferenced(absoluteOrPublicPath) {
     const hits = await Promise.all([
       prisma.galleryItem.findFirst({ where: { OR: or('image') }, select: { id: true } }),
       prisma.athlete.findFirst({ where: { OR: or('image') }, select: { id: true } }),
+      prisma.legacyMember.findFirst({ where: { OR: or('image') }, select: { id: true } }),
       prisma.program.findFirst({ where: { OR: or('image') }, select: { id: true } }),
       prisma.facility.findFirst({ where: { OR: or('image') }, select: { id: true } }),
       prisma.feature.findFirst({ where: { OR: or('image') }, select: { id: true } }),

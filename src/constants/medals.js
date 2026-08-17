@@ -4,7 +4,7 @@ export const MEDAL_OPTIONS = [
   { key: 'Gold', label: 'Gold' },
   { key: 'Silver', label: 'Silver' },
   { key: 'Bronze', label: 'Bronze' },
-  { key: 'Other', label: 'Other' },
+  { key: 'Other', label: 'None' },
 ];
 
 export const MEDAL_KEYS = MEDAL_OPTIONS.map((m) => m.key);
@@ -16,7 +16,7 @@ export function normalizeMedal(value) {
   if (lower === 'gold' || lower === '1st' || lower === 'first') return 'Gold';
   if (lower === 'silver' || lower === '2nd' || lower === 'second') return 'Silver';
   if (lower === 'bronze' || lower === '3rd' || lower === 'third') return 'Bronze';
-  if (lower === 'other' || lower === 'custom') return 'Other';
+  if (lower === 'none' || lower === 'other' || lower === 'custom') return 'Other';
   // Preserve custom labels as Other display path, but keep text if already title-cased custom
   if (MEDAL_KEYS.includes(raw)) return raw;
   return raw.length > 40 ? raw.slice(0, 40) : raw;

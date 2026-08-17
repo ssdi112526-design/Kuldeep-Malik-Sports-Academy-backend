@@ -4,7 +4,7 @@ import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import generateToken from '../utils/generateToken.js';
-import { writeAuditLog, getUserPermissions, loadUserWithRole, serializeUser } from '../utils/rbac.js';
+import { writeAuditLog, getUserPermissions, rememberAuthContext, serializeUser } from '../utils/rbac.js';
 import { sendPasswordResetEmail } from '../services/emailService.js';
 
 const STRONG_PASSWORD = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
@@ -34,20 +34,17 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(400, 'Login ID and password are required');
   }
 
-  let user = await prisma.user.findFirst({
+  const user = await prisma.user.findFirst({
     where: {
       OR: [{ email: loginId }, { username: loginId }],
     },
-    include: { roleRef: true, student: true, coach: true, parentProfile: true },
+    include: {
+      roleRef: true,
+      student: { select: { id: true, status: true, fullName: true, photo: true, registrationNumber: true, mobileNumber: true, email: true, batch: true, fatherName: true } },
+      coach: { select: { id: true, status: true, fullName: true, photo: true, coachCode: true, mobile: true, email: true, specialization: true, fatherName: true } },
+      parentProfile: { select: { id: true, fullName: true, phone: true, email: true, relation: true, photo: true } },
+    },
   });
-
-  // Also allow login by student registration number / coach code stored as username
-  if (!user) {
-    user = await prisma.user.findFirst({
-      where: { username: loginId },
-      include: { roleRef: true, student: true, coach: true, parentProfile: true },
-    });
-  }
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
     throw new ApiError(401, 'Invalid login ID or password');
@@ -69,17 +66,19 @@ export const login = asyncHandler(async (req, res) => {
     }
   }
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { lastLoginAt: new Date() },
-  });
-
-  const fresh = await loadUserWithRole(user.id);
-  const permissions = await getUserPermissions(fresh);
-  const safeUser = serializeUser(fresh, permissions);
+  const loggedInAt = new Date();
+  const [, permissions] = await Promise.all([
+    prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: loggedInAt },
+    }),
+    getUserPermissions(user),
+  ]);
+  const safeUser = serializeUser({ ...user, lastLoginAt: loggedInAt }, permissions);
   const token = generateToken(user.id, safeUser.roleSlug || user.role);
+  rememberAuthContext({ ...user, lastLoginAt: loggedInAt }, permissions);
 
-  await writeAuditLog({
+  writeAuditLog({
     userId: user.id,
     action: 'login',
     entity: 'user',

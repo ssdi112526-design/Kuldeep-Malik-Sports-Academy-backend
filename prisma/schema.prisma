@@ -342,7 +342,11 @@ model Facility {
 model Athlete {
   id             String   @id @default(uuid())
   name           String   @db.VarChar(150)
+  /// Weight / class label shown on cards (e.g. 76 KG)
   category       String   @db.VarChar(120)
+  ageGroup       String?  @map("age_group") @db.VarChar(80)
+  achievement    String?  @db.VarChar(200)
+  description    String?  @db.VarChar(2000)
   image          String?  @db.VarChar(500)
   objectPosition String?  @map("object_position") @db.VarChar(80)
   displayOrder   Int      @default(0) @map("display_order")
@@ -352,6 +356,25 @@ model Athlete {
 
   @@index([displayOrder, isActive])
   @@map("athletes")
+}
+
+/// Public Legacy / Prestigious Members (admin-managed CMS)
+model LegacyMember {
+  id             String   @id @default(uuid())
+  name           String   @db.VarChar(150)
+  designation    String   @db.VarChar(120)
+  achievement    String?  @db.VarChar(200)
+  description    String   @db.VarChar(2000)
+  image          String   @db.VarChar(500)
+  objectPosition String?  @map("object_position") @db.VarChar(80)
+  displayOrder   Int      @default(0) @map("display_order")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([displayOrder, isActive])
+  @@index([name])
+  @@map("legacy_members")
 }
 
 model Feature {
@@ -794,6 +817,8 @@ model Attendance {
   date                DateTime           @db.Date
   markedAt            DateTime           @default(now()) @map("marked_at")
   status              AttendanceStatus   @default(present)
+  /// Training slot for the calendar date: morning | evening
+  sessionSlot         String             @default("morning") @map("session_slot") @db.VarChar(20)
   /// Data plane: live | demo
   source              String             @default("live") @db.VarChar(20)
   /// Marking method shown in UI as Source: QR | MANUAL | BIOMETRIC
@@ -810,12 +835,13 @@ model Attendance {
   createdAt           DateTime           @default(now()) @map("created_at")
 
   @@unique([studentId, attendanceSessionId])
-  @@unique([studentId, date])
+  @@unique([studentId, date, sessionSlot])
   @@index([date])
   @@index([registrationId])
   @@index([markedAt])
   @@index([status])
   @@index([studentId, date])
+  @@index([sessionSlot])
   @@index([attendanceSessionId])
   @@index([source])
   @@index([method])
@@ -1167,6 +1193,8 @@ model PlayerAchievement {
   playerName      String?   @map("player_name") @db.VarChar(150)
   title           String    @db.VarChar(200)
   description     String?   @db.VarChar(2000)
+  /// Competition/event level used for medal tallying
+  level           String?   @db.VarChar(40)
   achievementType String?   @map("achievement_type") @db.VarChar(80)
   tournamentId    String?   @map("tournament_id")
   tournamentName  String?   @map("tournament_name") @db.VarChar(200)
@@ -1187,6 +1215,7 @@ model PlayerAchievement {
   @@index([playerName])
   @@index([tournamentId])
   @@index([medal])
+  @@index([level])
   @@index([year])
   @@index([achievedOn])
   @@index([showOnWebsite])

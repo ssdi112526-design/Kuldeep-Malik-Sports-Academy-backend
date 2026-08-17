@@ -91,7 +91,13 @@ router.get(
 // ---------------------------
 router.get('/admin/students', ...studentsRead, listStudentsAdmin);
 router.get('/admin/students/stats', ...studentsRead, getStudentStats);
-router.get('/admin/students/:id', ...studentsRead, getStudentById);
+router.get(
+  '/admin/students/:id',
+  protect,
+  requireAdminAccess,
+  requireAnyPermission(...modulePermissionKeys('students'), 'reports.view'),
+  getStudentById
+);
 router.post(
   '/admin/students/export',
   protect,

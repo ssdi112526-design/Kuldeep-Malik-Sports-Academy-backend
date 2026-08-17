@@ -428,7 +428,10 @@ export const facilityIdValidation = idParam;
 
 export const athleteCreateValidation = [
   body('name').trim().notEmpty().withMessage('Athlete name is required').isLength({ max: 150 }),
-  body('category').trim().notEmpty().withMessage('Category is required').isLength({ max: 120 }),
+  body('category').trim().notEmpty().withMessage('Weight / category is required').isLength({ max: 120 }),
+  body('ageGroup').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
+  body('achievement').optional({ checkFalsy: true }).trim().isLength({ max: 200 }),
+  body('description').optional({ checkFalsy: true }).trim().isLength({ max: 2000 }),
   body('objectPosition').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
   body('displayOrder').optional(),
   body('isActive').optional(),
@@ -437,7 +440,10 @@ export const athleteCreateValidation = [
 export const athleteUpdateValidation = [
   ...idParam,
   body('name').optional().trim().notEmpty().withMessage('Name cannot be empty').isLength({ max: 150 }),
-  body('category').optional().trim().notEmpty().withMessage('Category cannot be empty').isLength({ max: 120 }),
+  body('category').optional().trim().notEmpty().withMessage('Weight / category cannot be empty').isLength({ max: 120 }),
+  body('ageGroup').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
+  body('achievement').optional({ checkFalsy: true }).trim().isLength({ max: 200 }),
+  body('description').optional({ checkFalsy: true }).trim().isLength({ max: 2000 }),
   body('objectPosition').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
   body('displayOrder').optional(),
   body('isActive').optional(),
@@ -462,6 +468,8 @@ export const listAthletesAdmin = asyncHandler(async (req, res) => {
       OR: [
         { name: { contains: search, mode: 'insensitive' } },
         { category: { contains: search, mode: 'insensitive' } },
+        { ageGroup: { contains: search, mode: 'insensitive' } },
+        { achievement: { contains: search, mode: 'insensitive' } },
       ],
     }),
     ...(active === 'true' && { isActive: true }),
@@ -495,7 +503,10 @@ export const createAthlete = asyncHandler(async (req, res) => {
     data: {
       name: req.body.name.trim(),
       category: req.body.category.trim(),
-      objectPosition: req.body.objectPosition?.trim() || null,
+      ageGroup: req.body.ageGroup?.trim() || null,
+      achievement: req.body.achievement?.trim() || null,
+      description: req.body.description?.trim() || null,
+      objectPosition: req.body.objectPosition?.trim() || 'center',
       image,
       displayOrder: parseOrder(req.body.displayOrder, 0),
       isActive: parseBool(req.body.isActive, true),
@@ -520,8 +531,11 @@ export const updateAthlete = asyncHandler(async (req, res) => {
     data: {
       ...(req.body.name !== undefined && { name: req.body.name.trim() }),
       ...(req.body.category !== undefined && { category: req.body.category.trim() }),
+      ...(req.body.ageGroup !== undefined && { ageGroup: req.body.ageGroup?.trim() || null }),
+      ...(req.body.achievement !== undefined && { achievement: req.body.achievement?.trim() || null }),
+      ...(req.body.description !== undefined && { description: req.body.description?.trim() || null }),
       ...(req.body.objectPosition !== undefined && {
-        objectPosition: req.body.objectPosition?.trim() || null,
+        objectPosition: req.body.objectPosition?.trim() || 'center',
       }),
       ...(req.body.displayOrder !== undefined && { displayOrder: parseOrder(req.body.displayOrder) }),
       ...(req.body.isActive !== undefined && { isActive: parseBool(req.body.isActive) }),
@@ -544,6 +558,164 @@ export const deleteAthlete = asyncHandler(async (req, res) => {
 
 export const athleteListValidation = listQuery;
 export const athleteIdValidation = idParam;
+
+/* ───────────── Legacy / Prestigious Members ───────────── */
+
+export const legacyMemberCreateValidation = [
+  body('name').trim().notEmpty().withMessage('Member name is required').isLength({ min: 2, max: 150 }),
+  body('designation')
+    .trim()
+    .notEmpty()
+    .withMessage('Designation is required')
+    .isLength({ max: 120 }),
+  body('achievement').optional({ checkFalsy: true }).trim().isLength({ max: 200 }),
+  body('description')
+    .trim()
+    .notEmpty()
+    .withMessage('Description is required')
+    .isLength({ max: 2000 }),
+  body('objectPosition').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
+  body('displayOrder').optional(),
+  body('isActive').optional(),
+];
+
+export const legacyMemberUpdateValidation = [
+  ...idParam,
+  body('name').optional().trim().notEmpty().withMessage('Name cannot be empty').isLength({ min: 2, max: 150 }),
+  body('designation')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Designation cannot be empty')
+    .isLength({ max: 120 }),
+  body('achievement').optional({ checkFalsy: true }).trim().isLength({ max: 200 }),
+  body('description')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Description cannot be empty')
+    .isLength({ max: 2000 }),
+  body('objectPosition').optional({ checkFalsy: true }).trim().isLength({ max: 80 }),
+  body('displayOrder').optional(),
+  body('isActive').optional(),
+];
+
+export const listLegacyMembersPublic = asyncHandler(async (_req, res) => {
+  const items = await prisma.legacyMember.findMany({
+    where: { isActive: true },
+    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'desc' }],
+  });
+  res.json({ success: true, data: { members: withIds(items) } });
+});
+
+export const listLegacyMembersAdmin = asyncHandler(async (req, res) => {
+  const page = parsePage(req.query.page, 1);
+  const limit = parseLimit(req.query.limit, 20);
+  const search = (req.query.search || '').trim();
+  const active = req.query.active || 'all';
+
+  const where = {
+    ...(search && {
+      OR: [
+        { name: { contains: search, mode: 'insensitive' } },
+        { designation: { contains: search, mode: 'insensitive' } },
+        { achievement: { contains: search, mode: 'insensitive' } },
+      ],
+    }),
+    ...(active === 'true' && { isActive: true }),
+    ...(active === 'false' && { isActive: false }),
+  };
+
+  const [total, items] = await Promise.all([
+    prisma.legacyMember.count({ where }),
+    prisma.legacyMember.findMany({
+      where,
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      members: withIds(items),
+      pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
+    },
+  });
+});
+
+export const getLegacyMemberAdmin = asyncHandler(async (req, res) => {
+  const member = await prisma.legacyMember.findUnique({ where: { id: req.params.id } });
+  if (!member) throw new ApiError(404, 'Legacy member not found');
+  res.json({ success: true, data: { member: withId(member) } });
+});
+
+export const createLegacyMember = asyncHandler(async (req, res) => {
+  const image = req.file ? toPublicPath(req.file.filename) : null;
+  if (!image) throw new ApiError(400, 'Member photo is required');
+
+  const member = await prisma.legacyMember.create({
+    data: {
+      name: req.body.name.trim(),
+      designation: req.body.designation.trim(),
+      achievement: req.body.achievement?.trim() || null,
+      description: req.body.description.trim(),
+      objectPosition: req.body.objectPosition?.trim() || null,
+      image,
+      displayOrder: parseOrder(req.body.displayOrder, 0),
+      isActive: parseBool(req.body.isActive, true),
+    },
+  });
+
+  res
+    .status(201)
+    .json({ success: true, message: 'Legacy member created', data: { member: withId(member) } });
+});
+
+export const updateLegacyMember = asyncHandler(async (req, res) => {
+  const existing = await prisma.legacyMember.findUnique({ where: { id: req.params.id } });
+  if (!existing) throw new ApiError(404, 'Legacy member not found');
+
+  let image = existing.image;
+  if (req.file) {
+    deleteUploadedFile(existing.image);
+    image = toPublicPath(req.file.filename);
+  }
+
+  const member = await prisma.legacyMember.update({
+    where: { id: req.params.id },
+    data: {
+      ...(req.body.name !== undefined && { name: req.body.name.trim() }),
+      ...(req.body.designation !== undefined && { designation: req.body.designation.trim() }),
+      ...(req.body.achievement !== undefined && {
+        achievement: req.body.achievement?.trim() || null,
+      }),
+      ...(req.body.description !== undefined && { description: req.body.description.trim() }),
+      ...(req.body.objectPosition !== undefined && {
+        objectPosition: req.body.objectPosition?.trim() || null,
+      }),
+      ...(req.body.displayOrder !== undefined && { displayOrder: parseOrder(req.body.displayOrder) }),
+      ...(req.body.isActive !== undefined && { isActive: parseBool(req.body.isActive) }),
+      image,
+    },
+  });
+
+  res.json({ success: true, message: 'Legacy member updated', data: { member: withId(member) } });
+});
+
+export const deleteLegacyMember = asyncHandler(async (req, res) => {
+  const existing = await prisma.legacyMember.findUnique({ where: { id: req.params.id } });
+  if (!existing) throw new ApiError(404, 'Legacy member not found');
+
+  await prisma.legacyMember.delete({ where: { id: req.params.id } });
+  deleteUploadedFile(existing.image);
+
+  res.json({ success: true, message: 'Legacy member deleted' });
+});
+
+export const legacyMemberListValidation = listQuery;
+export const legacyMemberIdValidation = idParam;
 
 /* ───────────── Features ───────────── */
 

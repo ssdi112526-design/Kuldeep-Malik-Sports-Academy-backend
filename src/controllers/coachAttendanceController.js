@@ -286,28 +286,26 @@ export const getCoachAttendanceStats = asyncHandler(async (req, res) => {
 });
 
 export const listCoachAttendanceMonths = asyncHandler(async (_req, res) => {
-  const rows = await prisma.coachAttendance.findMany({
-    select: { date: true },
-    distinct: ['date'],
-    orderBy: { date: 'desc' },
-  });
+  const rows = await prisma.$queryRaw`
+    SELECT DISTINCT date_trunc('month', date)::date AS month
+    FROM coach_attendance
+    ORDER BY month DESC
+  `;
   const map = new Map();
-  for (const r of rows) {
-    const d = new Date(r.date);
+  for (const r of rows || []) {
+    const d = new Date(r.month);
     const y = d.getUTCFullYear();
     const m = d.getUTCMonth() + 1;
     const key = `${y}-${String(m).padStart(2, '0')}`;
-    if (!map.has(key)) {
-      map.set(key, {
-        year: y,
-        month: m,
-        label: new Intl.DateTimeFormat('en-IN', {
-          month: 'long',
-          year: 'numeric',
-          timeZone: 'UTC',
-        }).format(d),
-      });
-    }
+    map.set(key, {
+      year: y,
+      month: m,
+      label: new Intl.DateTimeFormat('en-IN', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }).format(d),
+    });
   }
   // Always include current month for empty datasets
   const now = todayParts();
