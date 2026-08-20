@@ -175,7 +175,7 @@ export const SYSTEM_ROLES = [
   { name: 'Reception', slug: 'reception', description: 'Students, inquiries and attendance desk.', isSystem: true },
   { name: 'Accountant', slug: 'accountant', description: 'Finance, fees collection and student fee views.', isSystem: true },
   { name: 'Staff', slug: 'staff', description: 'View-only access across allowed modules.', isSystem: true },
-  { name: 'Student', slug: 'student', description: 'Player portal only — profile, QR scan and own attendance.', isSystem: true },
+  { name: 'Student', slug: 'student', description: 'Player portal only — profile and own attendance.', isSystem: true },
   { name: 'Coach Portal', slug: 'coach_portal', description: 'Coach user panel only — profile, own attendance and account.', isSystem: true },
   { name: 'Parent', slug: 'parent', description: 'Parent portal only — linked child profile, attendance, achievements and tournaments.', isSystem: true },
 ];

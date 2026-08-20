@@ -131,6 +131,7 @@ const STUDENT_SELECT = {
   mobileNumber: true,
   batch: true,
   membershipType: true,
+  photo: true,
 };
 
 /**
@@ -388,7 +389,7 @@ function matrixFilterInput(input = {}) {
 function passesMatrixFilters(statusKey, hit, { statusFilter, methodFilter, locationFilter }) {
   if (statusFilter !== 'all' && statusKey !== statusFilter) return false;
   if (methodFilter && methodFilter !== 'ALL') {
-    if (!hit || String(hit.method || 'QR').toUpperCase() !== methodFilter) return false;
+    if (!hit || String(hit.method || 'MANUAL').toUpperCase() !== methodFilter) return false;
   }
   if (locationFilter === 'verified') {
     if (!hit || hit.locationVerified !== true) return false;
@@ -409,6 +410,7 @@ function buildMatrixRow(student, day, hit) {
     studentId: student.id,
     registrationId: student.registrationNumber,
     studentName: student.fullName,
+    photo: student.photo || '',
     fatherName: student.fatherName || '',
     batch: student.batch || '',
     membershipType: student.membershipType || '',
@@ -569,10 +571,10 @@ export async function calculateTodayStats({ date, now = new Date() } = {}) {
   for (const row of byStudent.values()) {
     if (row.status === 'present') {
       present += 1;
-      const m = String(row.method || 'QR').toUpperCase();
+      const m = String(row.method || 'MANUAL').toUpperCase();
       if (m === 'BIOMETRIC') biometricAttendance += 1;
-      else if (m === 'MANUAL') manualAttendance += 1;
-      else qrAttendance += 1;
+      else if (m === 'QR') qrAttendance += 1;
+      else manualAttendance += 1;
     } else if (row.status === 'leave') leave += 1;
     else if (row.status === 'medical_leave') medicalLeave += 1;
     else if (row.status === 'competition_leave') competitionLeave += 1;
@@ -663,7 +665,7 @@ async function loadCheckInMap({ from, to, studentIds } = {}) {
   for (const r of rows) {
     const key = `${r.studentId}|${dateKey(r.date)}`;
     if (!map.has(key)) {
-      const method = String(r.method || 'QR').toUpperCase();
+      const method = String(r.method || 'MANUAL').toUpperCase();
       const statusKey = normalizeAttendanceStatus(r.status) || 'present';
       map.set(key, {
         id: r.id,
@@ -674,7 +676,7 @@ async function loadCheckInMap({ from, to, studentIds } = {}) {
         sessionCode: r.session?.sessionCode || '',
         method,
         source: r.source || 'live',
-        sourceLabel: method === 'BIOMETRIC' ? 'Biometric' : method === 'MANUAL' ? 'Manual' : 'QR',
+        sourceLabel: method === 'BIOMETRIC' ? 'Biometric' : 'Manual',
         distanceFromAkhada: r.distanceFromAkhada,
         locationVerified: r.locationVerified,
         gpsAccuracy: r.gpsAccuracy,
@@ -759,27 +761,38 @@ export function paginateRows(rows, page = 1, limit = 20) {
 /** Day roster: all applicable students for one date. */
 export async function getDailyRoster(input = {}, { now = new Date() } = {}) {
   const day = parseDateOnly(input.date || dateKey(todayISTDateOnly(now)));
-  const matrix = await buildAttendanceMatrix(
-    {
-      period: 'custom',
-      from: dateKey(day),
-      to: dateKey(day),
-      search: input.search,
-      status: input.status,
-    },
-    { now }
-  );
-  const page = paginateRows(matrix.rows, input.page, input.limit);
-  const present = matrix.rows.filter((r) => r.statusKey === 'present').length;
-  const absent = matrix.rows.filter((r) => r.statusKey === 'absent').length;
-  const leave = matrix.rows.filter((r) => r.statusKey === 'leave').length;
-  const medicalLeave = matrix.rows.filter((r) => r.statusKey === 'medical_leave').length;
-  const competitionLeave = matrix.rows.filter((r) => r.statusKey === 'competition_leave').length;
+  const search = input.search || input.student || '';
+  const statusFilter =
+    normalizeAttendanceStatus(input.status) || String(input.status || 'all').toLowerCase();
+  const students = await loadApplicableStudents({ from: day, to: day, search });
+  const checkInMap = await loadCheckInMap({
+    from: day,
+    to: day,
+    studentIds: students.map((s) => s.id),
+  });
+
+  let rows = [];
+  for (const student of students) {
+    const join = toDateOnly(student.joiningDate) || day;
+    if (join.getTime() > day.getTime()) continue;
+    const hit = checkInMap.get(`${student.id}|${dateKey(day)}`);
+    const row = buildMatrixRow(student, day, hit);
+    if (statusFilter !== 'all' && row.statusKey !== statusFilter) continue;
+    rows.push(row);
+  }
+  rows.sort((a, b) => a.studentName.localeCompare(b.studentName));
+
+  const page = paginateRows(rows, input.page, input.limit);
+  const present = rows.filter((r) => r.statusKey === 'present').length;
+  const absent = rows.filter((r) => r.statusKey === 'absent').length;
+  const leave = rows.filter((r) => r.statusKey === 'leave').length;
+  const medicalLeave = rows.filter((r) => r.statusKey === 'medical_leave').length;
+  const competitionLeave = rows.filter((r) => r.statusKey === 'competition_leave').length;
   const accountable = present + absent;
   return {
     date: dateKey(day),
     summary: {
-      totalStudents: matrix.rows.length,
+      totalStudents: rows.length,
       present,
       absent,
       leave,

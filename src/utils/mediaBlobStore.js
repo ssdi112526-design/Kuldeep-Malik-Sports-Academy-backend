@@ -108,22 +108,25 @@ export async function collectReferencedUploadPaths() {
     }),
     safe('students', async () => {
       const rows = await prisma.student.findMany({
-        select: { photo: true, parentPhoto: true, qrCodePath: true },
+        select: { photo: true, parentPhoto: true, fatherPhoto: true, motherPhoto: true, qrCodePath: true },
       });
       rows.forEach((r) => {
         addPath(paths, r.photo);
         addPath(paths, r.parentPhoto);
+        addPath(paths, r.fatherPhoto);
+        addPath(paths, r.motherPhoto);
         addPath(paths, r.qrCodePath);
       });
     }),
     safe('studentDocs', async () => {
       const rows = await prisma.studentDocument.findMany({
-        select: { aadhaarFrontImage: true, aadhaarBackImage: true, panCardImage: true },
+        select: { aadhaarFrontImage: true, aadhaarBackImage: true, panCardImage: true, passportImage: true },
       });
       rows.forEach((r) => {
         addPath(paths, r.aadhaarFrontImage);
         addPath(paths, r.aadhaarBackImage);
         addPath(paths, r.panCardImage);
+        addPath(paths, r.passportImage);
       });
     }),
     safe('coaches', async () => {
@@ -214,12 +217,25 @@ export async function isUploadPathReferenced(absoluteOrPublicPath) {
         select: { id: true },
       }),
       prisma.student.findFirst({
-        where: { OR: [...or('photo'), ...or('parentPhoto'), ...or('qrCodePath')] },
+        where: {
+          OR: [
+            ...or('photo'),
+            ...or('parentPhoto'),
+            ...or('fatherPhoto'),
+            ...or('motherPhoto'),
+            ...or('qrCodePath'),
+          ],
+        },
         select: { id: true },
       }),
       prisma.studentDocument.findFirst({
         where: {
-          OR: [...or('aadhaarFrontImage'), ...or('aadhaarBackImage'), ...or('panCardImage')],
+          OR: [
+            ...or('aadhaarFrontImage'),
+            ...or('aadhaarBackImage'),
+            ...or('panCardImage'),
+            ...or('passportImage'),
+          ],
         },
         select: { id: true },
       }),

@@ -73,7 +73,7 @@ const errorHandler = (err, req, res, next) => {
 
   if (/Transaction already closed|expired transaction|transaction.*timeout/i.test(String(err.message || ''))) {
     statusCode = 503;
-    message = 'Server is busy. Please scan the new QR code again.';
+    message = 'Server is busy. Please try again.';
     err.code = err.code || 'TRANSACTION_TIMEOUT';
   }
 

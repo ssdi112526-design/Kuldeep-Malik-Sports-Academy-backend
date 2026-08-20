@@ -131,6 +131,8 @@ export const uploadSiteSettings = multer({
 const PHOTO_FIELDS = new Set([
   'photo',
   'parentPhoto',
+  'fatherPhoto',
+  'motherPhoto',
   'profileImage',
   'studentPhoto',
   'playerPhoto',
@@ -151,9 +153,20 @@ const entryStorage = multer.diskStorage({
     const safeImageExts = ['.jpg', '.jpeg', '.png', '.webp'];
     const safePdfExts = ['.pdf'];
 
+    const documentFields = new Set([
+      'aadhaarFront',
+      'aadhaarBack',
+      'additionalFile',
+      'panCard',
+      'passport',
+      'certificates',
+    ]);
     let safeExt = ext;
-    if (file.fieldname === 'certificates') {
-      safeExt = safePdfExts.includes(ext) ? ext : safeImageExts.includes(ext) ? ext : '.pdf';
+    if (documentFields.has(file.fieldname)) {
+      if (safePdfExts.includes(ext)) safeExt = ext;
+      else if (safeImageExts.includes(ext)) safeExt = ext;
+      else if (PDF_MIME.has(file.mimetype)) safeExt = '.pdf';
+      else safeExt = '.jpg';
     } else {
       safeExt = safeImageExts.includes(ext) ? ext : '.jpg';
     }
@@ -162,11 +175,19 @@ const entryStorage = multer.diskStorage({
   },
 });
 
+const STUDENT_DOC_FIELDS = new Set(['aadhaarFront', 'aadhaarBack', 'additionalFile', 'panCard', 'passport']);
+const DOC_IMAGE_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png']);
+
 function entryFileFilter(_req, file, cb) {
   // Certificates can be images or PDFs
   if (file.fieldname === 'certificates') {
     if (IMAGE_MIME.has(file.mimetype) || PDF_MIME.has(file.mimetype)) return cb(null, true);
     return cb(new ApiError(400, 'Certificates must be images (JPG/PNG/WEBP) or PDF'));
+  }
+
+  if (STUDENT_DOC_FIELDS.has(file.fieldname)) {
+    if (DOC_IMAGE_MIME.has(file.mimetype) || PDF_MIME.has(file.mimetype)) return cb(null, true);
+    return cb(new ApiError(400, 'Documents must be JPG, JPEG, PNG, or PDF'));
   }
 
   // Everything else in Entry Management is image-based
@@ -187,9 +208,19 @@ const STUDENT_FILE_ALIAS = {
   studentPhoto: 'photo',
   playerPhoto: 'photo',
   parent_photo: 'parentPhoto',
+  additionalFile: 'aadhaarBack',
 };
 
-const STUDENT_FILE_KEYS = new Set(['photo', 'parentPhoto', 'aadhaarFront', 'aadhaarBack', 'panCard']);
+const STUDENT_FILE_KEYS = new Set([
+  'photo',
+  'parentPhoto',
+  'fatherPhoto',
+  'motherPhoto',
+  'aadhaarFront',
+  'aadhaarBack',
+  'panCard',
+  'passport',
+]);
 const COACH_FILE_KEYS = new Set(['photo', 'aadhaarFront', 'aadhaarBack', 'panCard', 'certificates']);
 
 function normalizeEntryFiles(fileList, allowedKeys, aliasMap = {}) {
@@ -325,7 +356,7 @@ export function handleMulterError(err, _req, _res, next) {
       return next(
         new ApiError(
           400,
-          `Unexpected upload field "${err.field || 'unknown'}". For players use field name "photo" (parentPhoto for guardian).`
+          `Unexpected upload field "${err.field || 'unknown'}". For players use photo, fatherPhoto, motherPhoto, aadhaarFront, panCard, passport, or additionalFile.`
         )
       );
     }

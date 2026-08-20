@@ -90,6 +90,7 @@ app.use(
       return callback(null, false);
     },
     credentials: true,
+    exposedHeaders: ['Content-Disposition'],
   })
 );
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));

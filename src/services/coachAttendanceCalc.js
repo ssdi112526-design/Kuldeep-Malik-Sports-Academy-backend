@@ -19,6 +19,10 @@ import {
   resolvePeriodFilter,
   paginateRows,
 } from './attendanceCalc.js';
+import {
+  attendanceStatusLabel,
+  normalizeAttendanceStatus,
+} from '../constants/attendanceStatus.js';
 
 const COACH_SELECT = {
   id: true,
@@ -110,22 +114,39 @@ export async function loadApplicableCoaches({ from, to, search } = {}) {
   return [...map.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
-async function loadCoachPresentMap({ from, to, coachIds } = {}) {
-  const where = { date: { gte: from, lte: to }, status: 'present' };
+async function loadCoachStatusMap({ from, to, coachIds } = {}) {
+  const where = { date: { gte: from, lte: to } };
   if (coachIds?.length) where.coachId = { in: coachIds };
-  const rows = await prisma.coachAttendance.groupBy({
-    by: ['coachId', 'date'],
+  const rows = await prisma.coachAttendance.findMany({
     where,
+    select: { coachId: true, date: true, status: true, markedAt: true },
+    orderBy: { markedAt: 'asc' },
   });
   const map = new Map();
   for (const r of rows) {
-    if (!map.has(r.coachId)) map.set(r.coachId, new Set());
-    map.get(r.coachId).add(dateKey(r.date));
+    if (!map.has(r.coachId)) map.set(r.coachId, new Map());
+    const byDate = map.get(r.coachId);
+    const key = dateKey(r.date);
+    if (byDate.has(key)) continue;
+    byDate.set(key, normalizeAttendanceStatus(r.status) || 'present');
   }
   return map;
 }
 
-function calcCoachRow(coach, { from, to, trainingDayKeys, presentDates }) {
+async function loadCoachPresentMap({ from, to, coachIds } = {}) {
+  const statusMap = await loadCoachStatusMap({ from, to, coachIds });
+  const map = new Map();
+  for (const [coachId, byDate] of statusMap.entries()) {
+    const set = new Set();
+    for (const [key, status] of byDate.entries()) {
+      if (status === 'present') set.add(key);
+    }
+    map.set(coachId, set);
+  }
+  return map;
+}
+
+function calcCoachRow(coach, { from, to, trainingDayKeys, presentDates, statusByDate }) {
   const join = coachJoinDate(coach) || from;
   const coachFrom = maxDate(from, join);
   const trainingDays =
@@ -133,14 +154,28 @@ function calcCoachRow(coach, { from, to, trainingDayKeys, presentDates }) {
       ? countTrainingDates(coachFrom, to, trainingDayKeys)
       : 0;
   let presentDays = 0;
-  if (presentDates?.size) {
+  let leaveDays = 0;
+  let medicalLeaveDays = 0;
+  let competitionLeaveDays = 0;
+  if (statusByDate?.size) {
+    for (const [key, status] of statusByDate.entries()) {
+      const d = parseDateOnly(key);
+      if (d.getTime() < coachFrom.getTime() || d.getTime() > to.getTime()) continue;
+      if (status === 'present') presentDays += 1;
+      else if (status === 'leave') leaveDays += 1;
+      else if (status === 'medical_leave') medicalLeaveDays += 1;
+      else if (status === 'competition_leave') competitionLeaveDays += 1;
+    }
+  } else if (presentDates?.size) {
     for (const key of presentDates) {
       const d = parseDateOnly(key);
       if (d.getTime() >= coachFrom.getTime() && d.getTime() <= to.getTime()) presentDays += 1;
     }
   }
   presentDays = Math.min(presentDays, trainingDays || presentDays);
-  const absentDays = Math.max(0, trainingDays - presentDays);
+  const excusedDays = leaveDays + medicalLeaveDays + competitionLeaveDays;
+  const accountableDays = Math.max(0, trainingDays - excusedDays);
+  const absentDays = Math.max(0, accountableDays - presentDays);
   return {
     coachId: coach.id,
     coachCode: coach.coachCode,
@@ -153,10 +188,17 @@ function calcCoachRow(coach, { from, to, trainingDayKeys, presentDates }) {
     trainingDays,
     presentDays,
     absentDays,
-    attendancePercentage: pct2(presentDays, trainingDays),
+    leaveDays,
+    medicalLeaveDays,
+    competitionLeaveDays,
+    excusedDays,
+    attendancePercentage: pct2(presentDays, accountableDays || 0),
     present: presentDays,
     absent: absentDays,
-    attendanceRate: pct2(presentDays, trainingDays),
+    leave: leaveDays,
+    medicalLeave: medicalLeaveDays,
+    competitionLeave: competitionLeaveDays,
+    attendanceRate: pct2(presentDays, accountableDays || 0),
   };
 }
 
@@ -172,7 +214,11 @@ function buildCoachSummaryResult({
   const trainingDaysCalendar = countTrainingDates(from, to, trainingDayKeys);
   const expectedCoachDays = coachRows.reduce((s, r) => s + r.trainingDays, 0);
   const presentCoachDays = coachRows.reduce((s, r) => s + r.presentDays, 0);
-  const absentCoachDays = Math.max(0, expectedCoachDays - presentCoachDays);
+  const absentCoachDays = coachRows.reduce((s, r) => s + r.absentDays, 0);
+  const leaveCoachDays = coachRows.reduce((s, r) => s + (r.leaveDays || 0), 0);
+  const medicalLeaveCoachDays = coachRows.reduce((s, r) => s + (r.medicalLeaveDays || 0), 0);
+  const competitionLeaveCoachDays = coachRows.reduce((s, r) => s + (r.competitionLeaveDays || 0), 0);
+  const accountableCoachDays = presentCoachDays + absentCoachDays;
   return {
     period: { ...period, from: dateKey(from), to: dateKey(to), cappedToToday: window.cappedToToday },
     summary: {
@@ -184,10 +230,16 @@ function buildCoachSummaryResult({
       absentCoachDays,
       presentStudentDays: presentCoachDays,
       absentStudentDays: absentCoachDays,
-      attendancePercentage: pct2(presentCoachDays, expectedCoachDays),
+      leaveCoachDays,
+      medicalLeaveCoachDays,
+      competitionLeaveCoachDays,
+      attendancePercentage: pct2(presentCoachDays, accountableCoachDays),
       present: presentCoachDays,
       absent: absentCoachDays,
-      attendanceRate: pct2(presentCoachDays, expectedCoachDays),
+      leave: leaveCoachDays,
+      medicalLeave: medicalLeaveCoachDays,
+      competitionLeave: competitionLeaveCoachDays,
+      attendanceRate: pct2(presentCoachDays, accountableCoachDays),
       rawScanRecords,
       uniqueAttendanceDays: presentCoachDays,
       totalRecords: rawScanRecords,
@@ -209,12 +261,12 @@ export async function calculateCoachAttendanceSummary(input = {}, { now = new Da
   const coachIds = coaches.map((c) => c.id);
   const rawWhere = { date: { gte: from, lte: to } };
   if (coachIds.length) rawWhere.coachId = { in: coachIds };
-  const [presentMap, rawScanRecords] = await Promise.all([
-    loadCoachPresentMap({ from, to, coachIds }),
+  const [statusMap, rawScanRecords] = await Promise.all([
+    loadCoachStatusMap({ from, to, coachIds }),
     prisma.coachAttendance.count({ where: rawWhere }),
   ]);
   const coachRows = coaches.map((c) =>
-    calcCoachRow(c, { from, to, trainingDayKeys, presentDates: presentMap.get(c.id) })
+    calcCoachRow(c, { from, to, trainingDayKeys, statusByDate: statusMap.get(c.id) })
   );
 
   return buildCoachSummaryResult({
@@ -234,31 +286,49 @@ export async function calculateTodayCoachStats({ date, now = new Date() } = {}) 
   else if (date) day = parseDateOnly(date);
   else day = attendanceDateFromInstant(now);
 
-  const [totalCoaches, presentRows, methodRows] = await Promise.all([
+  const [totalCoaches, dayRows] = await Promise.all([
     prisma.coach.count({ where: { status: 'Active' } }),
-    prisma.coachAttendance.groupBy({
-      by: ['coachId'],
-      where: { date: day, status: 'present', coach: { status: 'Active' } },
-    }),
     prisma.coachAttendance.findMany({
-      where: { date: day, status: 'present', coach: { status: 'Active' } },
-      select: { coachId: true, method: true },
+      where: { date: day, coach: { status: 'Active' } },
+      select: { coachId: true, status: true, method: true, markedAt: true },
+      orderBy: { markedAt: 'asc' },
     }),
   ]);
-  const present = presentRows.length;
-  const absent = Math.max(0, totalCoaches - present);
-  const seen = new Set();
+
+  const byCoach = new Map();
+  for (const r of dayRows) {
+    if (byCoach.has(r.coachId)) continue;
+    byCoach.set(r.coachId, {
+      status: normalizeAttendanceStatus(r.status) || 'present',
+      method: r.method,
+    });
+  }
+
+  let present = 0;
+  let leave = 0;
+  let medicalLeave = 0;
+  let competitionLeave = 0;
+  let markedAbsent = 0;
   let qrAttendance = 0;
   let biometricAttendance = 0;
   let manualAttendance = 0;
-  for (const r of methodRows) {
-    if (seen.has(r.coachId)) continue;
-    seen.add(r.coachId);
-    const m = String(r.method || 'QR').toUpperCase();
-    if (m === 'BIOMETRIC') biometricAttendance += 1;
-    else if (m === 'MANUAL') manualAttendance += 1;
-    else qrAttendance += 1;
+
+  for (const row of byCoach.values()) {
+    if (row.status === 'present') {
+      present += 1;
+      const m = String(row.method || 'MANUAL').toUpperCase();
+      if (m === 'BIOMETRIC') biometricAttendance += 1;
+      else if (m === 'QR') qrAttendance += 1;
+      else manualAttendance += 1;
+    } else if (row.status === 'leave') leave += 1;
+    else if (row.status === 'medical_leave') medicalLeave += 1;
+    else if (row.status === 'competition_leave') competitionLeave += 1;
+    else if (row.status === 'absent') markedAbsent += 1;
   }
+
+  const excused = leave + medicalLeave + competitionLeave;
+  const absent = Math.max(0, totalCoaches - present - excused - markedAbsent) + markedAbsent;
+  const accountable = present + absent;
 
   return {
     date: dateKey(day),
@@ -266,8 +336,11 @@ export async function calculateTodayCoachStats({ date, now = new Date() } = {}) 
     totalStudents: totalCoaches,
     present,
     absent,
-    attendanceRate: pct2(present, totalCoaches),
-    attendancePercentage: pct2(present, totalCoaches),
+    leave,
+    medicalLeave,
+    competitionLeave,
+    attendanceRate: pct2(present, accountable),
+    attendancePercentage: pct2(present, accountable),
     qrAttendance,
     biometricAttendance,
     manualAttendance,
@@ -294,13 +367,14 @@ function formatIstDateDisplay(d) {
 }
 
 async function loadCoachCheckInMap({ from, to, coachIds } = {}) {
-  const where = { date: { gte: from, lte: to }, status: 'present' };
+  const where = { date: { gte: from, lte: to } };
   if (coachIds?.length) where.coachId = { in: coachIds };
   const rows = await prisma.coachAttendance.findMany({
     where,
     select: {
       coachId: true,
       date: true,
+      status: true,
       markedAt: true,
       method: true,
       source: true,
@@ -315,14 +389,17 @@ async function loadCoachCheckInMap({ from, to, coachIds } = {}) {
   for (const r of rows) {
     const key = `${r.coachId}|${dateKey(r.date)}`;
     if (!map.has(key)) {
-      const method = String(r.method || 'QR').toUpperCase();
+      const method = String(r.method || 'MANUAL').toUpperCase();
+      const statusKey = normalizeAttendanceStatus(r.status) || 'present';
       map.set(key, {
+        statusKey,
+        statusLabel: attendanceStatusLabel(statusKey),
         markedAt: r.markedAt,
         checkIn: formatIstTime(r.markedAt),
         sessionCode: r.session?.sessionCode || '',
         method,
         source: r.source || 'live',
-        sourceLabel: method === 'BIOMETRIC' ? 'Biometric' : method === 'MANUAL' ? 'Manual' : 'QR',
+        sourceLabel: method === 'BIOMETRIC' ? 'Biometric' : 'Manual',
         distanceFromAkhada: r.distanceFromAkhada,
         locationVerified: r.locationVerified,
         gpsAccuracy: r.gpsAccuracy,
@@ -334,12 +411,25 @@ async function loadCoachCheckInMap({ from, to, coachIds } = {}) {
 
 function presentMapFromCheckIn(checkInMap) {
   const map = new Map();
-  for (const compound of checkInMap.keys()) {
+  for (const [compound, hit] of checkInMap.entries()) {
+    if ((hit?.statusKey || 'present') !== 'present') continue;
     const sep = compound.indexOf('|');
     const coachId = compound.slice(0, sep);
     const date = compound.slice(sep + 1);
     if (!map.has(coachId)) map.set(coachId, new Set());
     map.get(coachId).add(date);
+  }
+  return map;
+}
+
+function statusMapFromCoachCheckIn(checkInMap) {
+  const map = new Map();
+  for (const [compound, hit] of checkInMap.entries()) {
+    const sep = compound.indexOf('|');
+    const coachId = compound.slice(0, sep);
+    const date = compound.slice(sep + 1);
+    if (!map.has(coachId)) map.set(coachId, new Map());
+    map.get(coachId).set(date, hit?.statusKey || 'absent');
   }
   return map;
 }
@@ -360,11 +450,11 @@ function collectCoachMatrixRows({
       const join = coachJoinDate(coach) || from;
       if (join.getTime() > day.getTime()) continue;
       const hit = checkInMap.get(`${coach.id}|${dayKeyStr}`);
-      const status = hit ? 'Present' : 'Absent';
-      if (statusFilter === 'present' && status !== 'Present') continue;
-      if (statusFilter === 'absent' && status !== 'Absent') continue;
+      const statusKey = hit?.statusKey || 'absent';
+      const status = hit?.statusLabel || attendanceStatusLabel(statusKey);
+      if (statusFilter && statusFilter !== 'all' && statusKey !== statusFilter) continue;
       if (methodFilter && methodFilter !== 'ALL') {
-        if (!hit || String(hit.method || 'QR').toUpperCase() !== methodFilter) continue;
+        if (!hit || String(hit.method || 'MANUAL').toUpperCase() !== methodFilter) continue;
       }
       if (locationFilter === 'verified') {
         if (!hit || hit.locationVerified !== true) continue;
@@ -379,6 +469,7 @@ function collectCoachMatrixRows({
         registrationId: coach.coachCode,
         studentName: coach.fullName,
         coachName: coach.fullName,
+        photo: coach.photo || '',
         fatherName: coach.fatherName || '',
         batch: coach.specialization || '',
         membershipType: '',
@@ -386,6 +477,8 @@ function collectCoachMatrixRows({
         date: dayKeyStr,
         dateDisplay: formatIstDateDisplay(day),
         status,
+        statusKey,
+        statusLabel: status,
         checkIn: hit?.checkIn || 0,
         checkOut: 0,
         markedAt: hit?.markedAt || null,
@@ -397,7 +490,7 @@ function collectCoachMatrixRows({
         locationVerified: hit?.locationVerified ?? null,
         gpsAccuracy: hit?.gpsAccuracy ?? null,
         locationLabel:
-          status !== 'Present'
+          statusKey !== 'present'
             ? '—'
             : hit?.locationVerified === true
               ? 'Verified'
@@ -405,7 +498,7 @@ function collectCoachMatrixRows({
                 ? 'Not Verified'
                 : '—',
         distanceLabel:
-          status !== 'Present' || hit?.distanceFromAkhada == null
+          statusKey !== 'present' || hit?.distanceFromAkhada == null
             ? '—'
             : `${Math.round(hit.distanceFromAkhada)}m`,
       });
@@ -423,7 +516,7 @@ export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() 
   const window = await resolveCoachCalcWindow(period, { now });
   const { from, to } = window;
   const search = input.search || input.coach || '';
-  const statusFilter = String(input.status || 'all').toLowerCase();
+  const statusFilter = normalizeAttendanceStatus(input.status) || String(input.status || 'all').toLowerCase();
   const methodFilter = String(input.method || input.sourceMethod || 'all').toUpperCase();
   const locationFilter = String(input.location || input.locationVerified || 'all').toLowerCase();
   const [trainingDayKeys, coaches] = await Promise.all([
@@ -448,9 +541,9 @@ export async function buildCoachAttendanceMatrix(input = {}, { now = new Date() 
     methodFilter,
     locationFilter,
   });
-  const presentMap = presentMapFromCheckIn(checkInMap);
+  const statusMap = statusMapFromCoachCheckIn(checkInMap);
   const coachRows = coaches.map((c) =>
-    calcCoachRow(c, { from, to, trainingDayKeys, presentDates: presentMap.get(c.id) })
+    calcCoachRow(c, { from, to, trainingDayKeys, statusByDate: statusMap.get(c.id) })
   );
   const summary = buildCoachSummaryResult({
     period,
@@ -477,7 +570,7 @@ export async function getCoachAttendanceHistory(coachId, input = {}, { now = new
   const coach = await prisma.coach.findUnique({ where: { id: coachId }, select: COACH_SELECT });
   if (!coach) return null;
   const period = resolvePeriodFilter(input, now);
-  const statusFilter = String(input.status || 'all').toLowerCase();
+  const statusFilter = normalizeAttendanceStatus(input.status) || String(input.status || 'all').toLowerCase();
   const methodFilter = String(input.method || input.sourceMethod || 'all').toUpperCase();
   const locationFilter = String(input.location || input.locationVerified || 'all').toLowerCase();
   const [window, trainingDayKeys] = await Promise.all([
@@ -500,7 +593,7 @@ export async function getCoachAttendanceHistory(coachId, input = {}, { now = new
     from,
     to,
     trainingDayKeys,
-    presentDates: new Set(rows.filter((r) => r.status === 'Present').map((r) => r.date)),
+    statusByDate: statusMapFromCoachCheckIn(checkInMap).get(coach.id),
   });
   return {
     coach: {
@@ -525,5 +618,75 @@ export async function getCoachAttendanceHistory(coachId, input = {}, { now = new
       to: dateKey(to),
       cappedToToday: window.cappedToToday,
     },
+  };
+}
+
+export async function getDailyCoachRoster(input = {}, { now = new Date() } = {}) {
+  const day = parseDateOnly(input.date || dateKey(todayISTDateOnly(now)));
+  const search = input.search || input.coach || '';
+  const statusFilter = normalizeAttendanceStatus(input.status) || String(input.status || 'all').toLowerCase();
+  const coaches = await loadApplicableCoaches({ from: day, to: day, search });
+  const coachIds = coaches.map((c) => c.id);
+  const records = coachIds.length
+    ? await prisma.coachAttendance.findMany({
+        where: { date: day, coachId: { in: coachIds } },
+        select: { coachId: true, status: true, markedAt: true, method: true },
+        orderBy: { markedAt: 'asc' },
+      })
+    : [];
+  const byCoach = new Map();
+  for (const r of records) {
+    if (!byCoach.has(r.coachId)) byCoach.set(r.coachId, r);
+  }
+
+  let rows = [];
+  for (const coach of coaches) {
+    const join = coachJoinDate(coach) || day;
+    if (join.getTime() > day.getTime()) continue;
+    const hit = byCoach.get(coach.id);
+    const statusKey = normalizeAttendanceStatus(hit?.status) || 'absent';
+    const status = attendanceStatusLabel(statusKey);
+    if (statusFilter !== 'all' && statusKey !== statusFilter) continue;
+    rows.push({
+      coachId: coach.id,
+      studentId: coach.id,
+      coachCode: coach.coachCode,
+      registrationId: coach.coachCode,
+      studentName: coach.fullName,
+      coachName: coach.fullName,
+      photo: coach.photo || '',
+      fatherName: coach.fatherName || '',
+      mobileNumber: coach.mobile || '',
+      date: dateKey(day),
+      dateDisplay: formatIstDateDisplay(day),
+      status,
+      statusKey,
+      statusLabel: status,
+      markedAt: hit?.markedAt || null,
+      method: hit?.method || null,
+    });
+  }
+  rows.sort((a, b) => a.studentName.localeCompare(b.studentName));
+  const page = paginateRows(rows, input.page, input.limit);
+  const present = rows.filter((r) => r.statusKey === 'present').length;
+  const absent = rows.filter((r) => r.statusKey === 'absent').length;
+  const leave = rows.filter((r) => r.statusKey === 'leave').length;
+  const medicalLeave = rows.filter((r) => r.statusKey === 'medical_leave').length;
+  const competitionLeave = rows.filter((r) => r.statusKey === 'competition_leave').length;
+  return {
+    date: dateKey(day),
+    summary: {
+      totalCoaches: rows.length,
+      totalStudents: rows.length,
+      present,
+      absent,
+      leave,
+      medicalLeave,
+      competitionLeave,
+      attendancePercentage: pct2(present, present + absent),
+      attendanceRate: pct2(present, present + absent),
+    },
+    rows: page.rows,
+    pagination: page.pagination,
   };
 }

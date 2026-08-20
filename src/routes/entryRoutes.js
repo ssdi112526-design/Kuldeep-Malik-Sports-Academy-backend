@@ -15,6 +15,7 @@ import { modulePermissionKeys } from '../constants/permissions.js';
 import {
   listStudentsAdmin,
   getStudentById,
+  downloadStudentDocument,
   createStudent,
   updateStudent,
   deleteStudent,
@@ -97,6 +98,18 @@ router.get(
   requireAdminAccess,
   requireAnyPermission(...modulePermissionKeys('students'), 'reports.view'),
   getStudentById
+);
+router.get(
+  '/admin/students/:id/documents/:slot',
+  protect,
+  requireAdminAccess,
+  requireAnyPermission(
+    ...modulePermissionKeys('students'),
+    'reports.view',
+    'reports.download',
+    'students.download'
+  ),
+  downloadStudentDocument
 );
 router.post(
   '/admin/students/export',

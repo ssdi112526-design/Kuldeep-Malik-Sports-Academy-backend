@@ -580,13 +580,15 @@ model Student {
   pincode String? @db.VarChar(10)
 
   // Identity numbers (images live in StudentDocument)
-  aadhaarNumber String @unique @db.VarChar(12) @map("aadhaar_number")
-  panNumber String @unique @db.VarChar(10) @map("pan_number")
+  aadhaarNumber String? @unique @db.VarChar(12) @map("aadhaar_number")
+  panNumber String? @unique @db.VarChar(10) @map("pan_number")
 
   // Student photo
   photo String? @db.VarChar(400)
-  // Parent / guardian photo (on player record)
+  // Legacy parent photo (kept for existing records)
   parentPhoto String? @map("parent_photo") @db.VarChar(400)
+  fatherPhoto String? @map("father_photo") @db.VarChar(400)
+  motherPhoto String? @map("mother_photo") @db.VarChar(400)
 
   // Training
   joiningDate DateTime @map("joining_date")
@@ -676,6 +678,7 @@ model StudentDocument {
   aadhaarFrontImage String? @map("aadhaar_front_image") @db.VarChar(400)
   aadhaarBackImage String? @map("aadhaar_back_image") @db.VarChar(400)
   panCardImage String? @map("pan_card_image") @db.VarChar(400)
+  passportImage String? @map("passport_image") @db.VarChar(400)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

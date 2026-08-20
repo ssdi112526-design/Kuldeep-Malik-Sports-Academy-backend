@@ -1,6 +1,6 @@
 /**
- * Central multi-method attendance marking.
- * Methods: QR | BIOMETRIC (MANUAL disabled)
+ * Central attendance marking.
+ * Admin/staff mark manually (MANUAL). Biometric ingest may still write BIOMETRIC.
  * Data plane source remains live|demo for existing filters/seeds.
  */
 import prisma from '../config/db.js';
@@ -32,15 +32,15 @@ export function inferAttendanceSessionSlot(markedAt = new Date()) {
   return hour < 14 ? 'morning' : 'evening';
 }
 
-/** UI/export label — legacy `live` rows without method → QR */
+/** UI/export label — unmarked method defaults to Manual */
 export function displayAttendanceSource(row = {}) {
   const method = String(row.method || '').toUpperCase();
   if (ATTENDANCE_METHODS.includes(method)) return method;
   if (row.source === 'demo') return 'DEMO';
-  return 'QR';
+  return 'MANUAL';
 }
 
-export function normalizeMethod(value, fallback = 'QR') {
+export function normalizeMethod(value, fallback = 'MANUAL') {
   const m = String(value || fallback).toUpperCase();
   return ATTENDANCE_METHODS.includes(m) ? m : fallback;
 }
@@ -120,7 +120,7 @@ export async function resolvePersonByBiometricUserId(biometricUserId) {
  */
 export async function markStudentPresent({
   studentId,
-  method = 'QR',
+  method = 'BIOMETRIC',
   markedAt = new Date(),
   attendanceSessionId = null,
   deviceId = null,
@@ -136,10 +136,7 @@ export async function markStudentPresent({
   const at = new Date(markedAt);
   const date = attendanceDateFromInstant(at);
   const sessionSlot = inferAttendanceSessionSlot(at);
-  const methodNorm = normalizeMethod(method);
-  if (methodNorm === 'MANUAL') {
-    throw new ApiError(403, 'Manual attendance is disabled. Use QR scan or biometric.');
-  }
+  const methodNorm = normalizeMethod(method, 'BIOMETRIC');
 
   const already = await prisma.attendance.findFirst({
     where: { studentId: student.id, date, sessionSlot },
@@ -225,28 +222,36 @@ export async function upsertStudentAttendanceStatus({
 
   const at = new Date(markedAt);
   const methodNorm = normalizeMethod(method, 'MANUAL');
-  const sessionSlot = normalizeSessionSlot(sessionSlotInput, inferAttendanceSessionSlot(at));
+  const existing = await prisma.attendance.findFirst({
+    where: { studentId: student.id, date: day },
+    orderBy: [{ sessionSlot: 'asc' }, { markedAt: 'asc' }],
+  });
 
-  const record = await prisma.attendance.upsert({
-    where: {
-      studentId_date_sessionSlot: { studentId: student.id, date: day, sessionSlot },
-    },
-    create: {
-      studentId: student.id,
-      registrationId: student.registrationNumber,
-      date: day,
-      markedAt: at,
-      status: statusKey,
-      sessionSlot,
-      source: dataSource === 'demo' ? 'demo' : 'live',
-      method: methodNorm,
-    },
-    update: {
-      status: statusKey,
-      markedAt: at,
-      method: methodNorm,
-      source: dataSource === 'demo' ? 'demo' : 'live',
-    },
+  const record = existing
+    ? await prisma.attendance.update({
+        where: { id: existing.id },
+        data: {
+          status: statusKey,
+          markedAt: at,
+          method: methodNorm,
+          source: dataSource === 'demo' ? 'demo' : 'live',
+        },
+      })
+    : await prisma.attendance.create({
+        data: {
+          studentId: student.id,
+          registrationId: student.registrationNumber,
+          date: day,
+          markedAt: at,
+          status: statusKey,
+          sessionSlot: 'morning',
+          source: dataSource === 'demo' ? 'demo' : 'live',
+          method: methodNorm,
+        },
+      });
+
+  await prisma.attendance.deleteMany({
+    where: { studentId: student.id, date: day, id: { not: record.id } },
   });
 
   return {
@@ -265,7 +270,7 @@ export async function upsertStudentAttendanceStatus({
 
 export async function markCoachPresentRecord({
   coachId,
-  method = 'QR',
+  method = 'BIOMETRIC',
   markedAt = new Date(),
   attendanceSessionId = null,
   deviceId = null,
@@ -280,10 +285,7 @@ export async function markCoachPresentRecord({
 
   const at = new Date(markedAt);
   const date = attendanceDateFromInstant(at);
-  const methodNorm = normalizeMethod(method);
-  if (methodNorm === 'MANUAL') {
-    throw new ApiError(403, 'Manual attendance is disabled. Use QR scan or biometric.');
-  }
+  const methodNorm = normalizeMethod(method, 'BIOMETRIC');
 
   const already = await prisma.coachAttendance.findFirst({
     where: { coachId: coach.id, date },
@@ -333,4 +335,66 @@ export async function markCoachPresentRecord({
     }
     throw e;
   }
+}
+
+/**
+ * Admin upsert of coach attendance for a calendar date (one row per coach+date).
+ */
+export async function upsertCoachAttendanceStatus({
+  coachId,
+  date,
+  status,
+  markedAt = new Date(),
+  method = 'MANUAL',
+  dataSource = 'live',
+} = {}) {
+  const statusKey = normalizeAttendanceStatus(status);
+  if (!statusKey) {
+    throw new ApiError(400, 'Invalid attendance status. Use Present, Absent, Leave, Medical Leave, or Competition Leave.');
+  }
+
+  const coach = await prisma.coach.findUnique({ where: { id: coachId } });
+  if (!coach) throw new ApiError(404, 'Coach not found');
+
+  let day;
+  try {
+    day = typeof date === 'string' ? parseDateOnly(date) : attendanceDateFromInstant(date || markedAt);
+  } catch {
+    throw new ApiError(400, 'Invalid date. Use YYYY-MM-DD');
+  }
+
+  const at = new Date(markedAt);
+  const methodNorm = normalizeMethod(method, 'MANUAL');
+
+  const record = await prisma.coachAttendance.upsert({
+    where: { coachId_date: { coachId: coach.id, date: day } },
+    create: {
+      coachId: coach.id,
+      coachCode: coach.coachCode,
+      date: day,
+      markedAt: at,
+      status: statusKey,
+      source: dataSource === 'demo' ? 'demo' : 'live',
+      method: methodNorm,
+    },
+    update: {
+      status: statusKey,
+      markedAt: at,
+      method: methodNorm,
+      source: dataSource === 'demo' ? 'demo' : 'live',
+    },
+  });
+
+  return {
+    record,
+    date: dateKey(day),
+    status: statusKey,
+    statusLabel: attendanceStatusLabel(statusKey),
+    person: {
+      type: 'coach',
+      id: coach.id,
+      name: coach.fullName,
+      code: coach.coachCode,
+    },
+  };
 }

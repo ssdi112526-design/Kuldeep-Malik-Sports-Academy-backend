@@ -1,5 +1,3 @@
-import crypto from 'crypto';
-import QRCode from 'qrcode';
 import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
@@ -22,23 +20,11 @@ import {
   getDailyRoster,
   getStudentAttendanceHistory,
 } from '../services/attendanceCalc.js';
-import { assertQrGeofence } from '../services/geofenceService.js';
-import { encodeAttendanceQrContent } from '../utils/attendanceQrUrl.js';
 import {
   attendanceStatusLabel,
   normalizeAttendanceStatus,
 } from '../constants/attendanceStatus.js';
-import { upsertStudentAttendanceStatus, inferAttendanceSessionSlot } from '../services/attendanceMarkService.js';
-
-/** One-time QR lifetime in seconds (default 60). */
-const QR_TTL_SECONDS = Math.min(
-  3600,
-  Math.max(15, Number(process.env.ATTENDANCE_QR_TTL_SECONDS || 60))
-);
-
-function hashToken(token) {
-  return crypto.createHash('sha256').update(String(token)).digest('hex');
-}
+import { upsertStudentAttendanceStatus } from '../services/attendanceMarkService.js';
 
 function safeResolvePeriod(input = {}) {
   try {
@@ -100,260 +86,6 @@ function exportFilenameStamp(period) {
   }
   return new Date().toISOString().slice(0, 10);
 }
-
-function makeRawToken() {
-  return crypto.randomBytes(32).toString('hex');
-}
-
-async function expireStaleSessions(tx = prisma) {
-  const now = new Date();
-  await tx.attendanceSession.updateMany({
-    where: { status: 'ACTIVE', expiresAt: { lt: now } },
-    data: { status: 'EXPIRED', closedAt: now, displayToken: null },
-  });
-}
-
-async function nextSessionCode(tx = prisma) {
-  const day = new Date();
-  const y = day.getFullYear();
-  const m = String(day.getMonth() + 1).padStart(2, '0');
-  const d = String(day.getDate()).padStart(2, '0');
-  const prefix = `ATT-${y}${m}${d}-`;
-  const last = await tx.attendanceSession.findFirst({
-    where: { sessionCode: { startsWith: prefix } },
-    orderBy: { sessionCode: 'desc' },
-    select: { sessionCode: true },
-  });
-  let n = 1;
-  if (last?.sessionCode) {
-    const part = last.sessionCode.slice(prefix.length);
-    const parsed = Number.parseInt(part, 10);
-    if (Number.isFinite(parsed)) n = parsed + 1;
-  }
-  return `${prefix}${String(n).padStart(3, '0')}`;
-}
-
-function publicSession(session, { qrPayload, qrDataUrl } = {}) {
-  if (!session) return null;
-  return {
-    id: session.id,
-    _id: session.id,
-    sessionCode: session.sessionCode,
-    status: session.status,
-    expiresAt: session.expiresAt,
-    usedAt: session.usedAt || null,
-    usedByStudentId: session.usedByStudentId || null,
-    closedAt: session.closedAt,
-    createdAt: session.createdAt,
-    ttlSeconds: QR_TTL_SECONDS,
-    createdBy: session.createdBy
-      ? { id: session.createdBy.id, name: session.createdBy.name }
-      : null,
-    qrPayload: qrPayload || null,
-    qrDataUrl: qrDataUrl || null,
-  };
-}
-
-async function buildQrAssets(session, rawToken) {
-  const payload = {
-    type: 'akhada_attendance',
-    sessionId: session.id,
-    sessionCode: session.sessionCode,
-    token: rawToken,
-    expiresAt: session.expiresAt.toISOString(),
-  };
-  // Encode as website URL so phone camera opens the site (not raw JSON).
-  const qrContent = encodeAttendanceQrContent(payload);
-  const qrDataUrl = await QRCode.toDataURL(qrContent, {
-    errorCorrectionLevel: 'M',
-    margin: 2,
-    width: 512,
-  });
-  return { qrPayload: payload, qrDataUrl, qrUrl: qrContent };
-}
-
-async function createActiveSession(tx, { createdById, ttlSeconds = QR_TTL_SECONDS }) {
-  const rawToken = makeRawToken();
-  const tokenHash = hashToken(rawToken);
-  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
-  const sessionCode = await nextSessionCode(tx);
-  const session = await tx.attendanceSession.create({
-    data: {
-      sessionCode,
-      tokenHash,
-      displayToken: rawToken,
-      status: 'ACTIVE',
-      source: 'live',
-      expiresAt,
-      createdById: createdById || null,
-    },
-    include: { createdBy: { select: { id: true, name: true } } },
-  });
-  return { session, rawToken };
-}
-
-/**
- * If desk is open (latest QR was USED/EXPIRED, not CLOSED) and nothing is ACTIVE,
- * mint a replacement QR so admin display keeps rotating.
- */
-async function ensureActiveSessionForDesk(createdById) {
-  await expireStaleSessions();
-  const active = await prisma.attendanceSession.findFirst({
-    where: { status: 'ACTIVE' },
-    orderBy: { createdAt: 'desc' },
-    include: { createdBy: { select: { id: true, name: true } } },
-  });
-  if (active) return active;
-
-  const latest = await prisma.attendanceSession.findFirst({
-    orderBy: { createdAt: 'desc' },
-    select: { status: true },
-  });
-  if (!latest || latest.status === 'CLOSED') return null;
-
-  const { session } = await prisma.$transaction(async (tx) => {
-    await expireStaleSessions(tx);
-    const stillActive = await tx.attendanceSession.findFirst({ where: { status: 'ACTIVE' } });
-    if (stillActive) {
-      return {
-        session: await tx.attendanceSession.findFirst({
-          where: { id: stillActive.id },
-          include: { createdBy: { select: { id: true, name: true } } },
-        }),
-      };
-    }
-    const latestInside = await tx.attendanceSession.findFirst({
-      orderBy: { createdAt: 'desc' },
-      select: { status: true },
-    });
-    if (!latestInside || latestInside.status === 'CLOSED') return { session: null };
-    return createActiveSession(tx, { createdById });
-  });
-  return session;
-}
-
-/** Admin: create new QR session (closes previous ACTIVE) */
-export const generateAttendanceQr = asyncHandler(async (req, res) => {
-  const ttlSeconds = Math.min(
-    3600,
-    Math.max(15, Number(req.body.ttlSeconds) || QR_TTL_SECONDS)
-  );
-
-  const { session, rawToken } = await prisma.$transaction(
-    async (tx) => {
-      await expireStaleSessions(tx);
-      await tx.attendanceSession.updateMany({
-        where: { status: 'ACTIVE' },
-        data: { status: 'CLOSED', closedAt: new Date(), displayToken: null },
-      });
-      return createActiveSession(tx, { createdById: req.user.id, ttlSeconds });
-    },
-    { maxWait: 10000, timeout: 20000 }
-  );
-
-  const assets = await buildQrAssets(session, rawToken);
-
-  await writeAuditLog({
-    userId: req.user.id,
-    action: 'attendance_qr_generate',
-    entity: 'attendance_session',
-    entityId: session.id,
-    details: { sessionCode: session.sessionCode, ttlSeconds },
-    req,
-  });
-
-  res.status(201).json({
-    success: true,
-    message: 'Attendance QR generated',
-    data: { session: publicSession(session, assets) },
-  });
-});
-
-export const getActiveAttendanceQr = asyncHandler(async (req, res) => {
-  let session = await ensureActiveSessionForDesk(req.user?.id);
-  if (!session) {
-    return res.json({ success: true, data: { session: null, ttlSeconds: QR_TTL_SECONDS } });
-  }
-  // Heal ACTIVE sessions that lost displayToken (QR image would otherwise be blank).
-  if (!session.displayToken) {
-    const rawToken = makeRawToken();
-    session = await prisma.attendanceSession.update({
-      where: { id: session.id },
-      data: { displayToken: rawToken, tokenHash: hashToken(rawToken) },
-      include: { createdBy: { select: { id: true, name: true } } },
-    });
-  }
-  const assets = await buildQrAssets(session, session.displayToken);
-  res.json({
-    success: true,
-    data: { session: publicSession(session, assets), ttlSeconds: QR_TTL_SECONDS },
-  });
-});
-
-export const closeAttendanceQr = asyncHandler(async (req, res) => {
-  await expireStaleSessions();
-  const id = req.params.id || req.body.sessionId;
-  const where = id ? { id, status: 'ACTIVE' } : { status: 'ACTIVE' };
-  const session = await prisma.attendanceSession.findFirst({ where });
-  if (!session) throw new ApiError(404, 'No active attendance QR is available.');
-
-  const updated = await prisma.attendanceSession.update({
-    where: { id: session.id },
-    data: { status: 'CLOSED', closedAt: new Date(), displayToken: null },
-    include: { createdBy: { select: { id: true, name: true } } },
-  });
-
-  await writeAuditLog({
-    userId: req.user.id,
-    action: 'attendance_qr_close',
-    entity: 'attendance_session',
-    entityId: updated.id,
-    details: { sessionCode: updated.sessionCode },
-    req,
-  });
-
-  res.json({
-    success: true,
-    message: 'Attendance QR closed',
-    data: { session: publicSession(updated) },
-  });
-});
-
-export const listAttendanceSessions = asyncHandler(async (req, res) => {
-  await expireStaleSessions();
-  const page = Math.max(1, Number(req.query.page) || 1);
-  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
-  const [total, rows] = await Promise.all([
-    prisma.attendanceSession.count(),
-    prisma.attendanceSession.findMany({
-      orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
-      include: {
-        createdBy: { select: { id: true, name: true } },
-        usedByStudent: { select: { id: true, fullName: true, registrationNumber: true } },
-        _count: { select: { records: true } },
-      },
-    }),
-  ]);
-  res.json({
-    success: true,
-    data: {
-      sessions: rows.map((s) => ({
-        ...publicSession(s),
-        presentCount: s._count.records,
-        usedBy: s.usedByStudent
-          ? {
-              id: s.usedByStudent.id,
-              fullName: s.usedByStudent.fullName,
-              registrationNumber: s.usedByStudent.registrationNumber,
-            }
-          : null,
-      })),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) || 1 },
-    },
-  });
-});
 
 export const getAttendanceStats = asyncHandler(async (req, res) => {
   let date;
@@ -468,7 +200,7 @@ export const listAttendanceRecords = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: {
-      view: 'scans',
+      view: 'records',
       period: calc.period,
       summary: calc.summary,
       records: withIds(
@@ -482,13 +214,13 @@ export const listAttendanceRecords = asyncHandler(async (req, res) => {
           sessionCode: r.session?.sessionCode,
           attendanceSessionId: r.attendanceSessionId,
           source: r.source || r.session?.source || 'live',
-          method: r.method || 'QR',
+          method: r.method || 'MANUAL',
           sourceLabel:
-            String(r.method || 'QR').toUpperCase() === 'BIOMETRIC'
+            String(r.method || 'MANUAL').toUpperCase() === 'BIOMETRIC'
               ? 'Biometric'
-              : String(r.method || 'QR').toUpperCase() === 'MANUAL'
+              : String(r.method || 'MANUAL').toUpperCase() === 'MANUAL'
                 ? 'Manual'
-                : 'QR',
+                : 'Manual',
           student: r.student ? withId(r.student) : null,
         }))
       ),
@@ -630,7 +362,7 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
       status: r.status,
       checkIn: r.checkIn,
       checkOut: r.checkOut,
-      sourceLabel: r.sourceLabel || (r.status === 'Present' ? 'QR' : '—'),
+      sourceLabel: r.sourceLabel || (r.status === 'Present' ? 'Manual' : '—'),
       distanceLabel: r.distanceLabel || '—',
       locationLabel: r.locationLabel || '—',
     }));
@@ -702,288 +434,11 @@ export const exportAttendanceExcel = asyncHandler(async (req, res) => {
     sessionCode: r.session?.sessionCode || '',
   }));
 
-  const buffer = await toXlsxBuffer(rows, columns, { sheetName: 'Scan Records', colorStatus: true });
+  const buffer = await toXlsxBuffer(rows, columns, { sheetName: 'Attendance Records', colorStatus: true });
   const stamp = exportFilenameStamp(period);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="raghunandan_akhada_scans_${stamp.toLowerCase()}.xlsx"`);
+  res.setHeader('Content-Disposition', `attachment; filename="raghunandan_akhada_attendance_records_${stamp.toLowerCase()}.xlsx"`);
   return res.send(buffer);
-});
-
-/**
- * Student scan — STRICT one-time QR.
- * Atomic claim ACTIVE → USED, then create attendance + next ACTIVE QR in one transaction.
- */
-export const scanAttendance = asyncHandler(async (req, res) => {
-  const studentId = req.user.studentId;
-  const student = await prisma.student.findUnique({ where: { id: studentId } });
-  if (!student) throw new ApiError(404, 'Student not found');
-  if (student.status !== 'Active') {
-    throw new ApiError(403, 'Your student account is not active. Please contact the Academy administrator.');
-  }
-
-  let payload = req.body?.payload ?? req.body?.qrData ?? req.body;
-  if (typeof payload === 'string') {
-    try {
-      payload = JSON.parse(payload);
-    } catch {
-      throw new ApiError(
-        400,
-        'Invalid Attendance QR.\nPlease scan the current QR displayed by the admin.',
-        'QR_INVALID'
-      );
-    }
-  }
-
-  const sessionId = payload?.sessionId;
-  const token = payload?.token;
-  if (payload?.type === 'akhada_coach_attendance') {
-    throw new ApiError(
-      400,
-      'Coach QR cannot be used for student attendance.\nPlease scan the student attendance QR.',
-      'WRONG_ATTENDANCE_TYPE'
-    );
-  }
-  if (!sessionId || !token || payload?.type !== 'akhada_attendance') {
-    throw new ApiError(
-      400,
-      'Invalid Attendance QR.\nPlease scan the current QR displayed by the admin.',
-      'QR_INVALID'
-    );
-  }
-
-  // GPS geofence — before consuming QR
-  const geo = await assertQrGeofence({
-    latitude: req.body?.latitude ?? payload?.latitude,
-    longitude: req.body?.longitude ?? payload?.longitude,
-    accuracy: req.body?.accuracy ?? req.body?.gpsAccuracy ?? payload?.accuracy,
-    timestamp: req.body?.timestamp ?? payload?.timestamp,
-  });
-
-  const tokenHash = hashToken(token);
-  const markedAt = new Date();
-  const date = attendanceDateFromInstant(markedAt);
-  const sessionSlot = inferAttendanceSessionSlot(markedAt);
-
-  // Reject duplicate attendance for this session slot BEFORE consuming the QR
-  const alreadyToday = await prisma.attendance.findFirst({
-    where: { studentId: student.id, date, sessionSlot },
-    select: { id: true },
-  });
-  if (alreadyToday) {
-    throw new ApiError(
-      409,
-      `Your ${sessionSlot} attendance for today has already been marked.`,
-      'ATTENDANCE_ALREADY_MARKED'
-    );
-  }
-
-  const existingSession = await prisma.attendanceSession.findUnique({ where: { id: sessionId } });
-  if (!existingSession) {
-    throw new ApiError(
-      400,
-      'Invalid Attendance QR.\nPlease scan the current QR displayed by the admin.',
-      'QR_INVALID'
-    );
-  }
-  if (existingSession.tokenHash !== tokenHash) {
-    throw new ApiError(
-      400,
-      'Invalid Attendance QR.\nPlease scan the current QR displayed by the admin.',
-      'QR_INVALID'
-    );
-  }
-  if (existingSession.status === 'USED') {
-    throw new ApiError(
-      409,
-      'This QR code has already been used. Please scan the new QR code.',
-      'QR_ALREADY_USED'
-    );
-  }
-  if (existingSession.status === 'CLOSED') {
-    throw new ApiError(
-      400,
-      'No active attendance QR is available.\nPlease contact the Academy administrator.',
-      'QR_CLOSED'
-    );
-  }
-  if (existingSession.status === 'EXPIRED' || existingSession.expiresAt < new Date()) {
-    if (existingSession.status === 'ACTIVE') {
-      await prisma.attendanceSession.updateMany({
-        where: { id: existingSession.id, status: 'ACTIVE' },
-        data: { status: 'EXPIRED', closedAt: new Date(), displayToken: null },
-      });
-    }
-    throw new ApiError(400, 'This attendance QR has expired.\nPlease scan the new QR.', 'QR_EXPIRED');
-  }
-
-  // Short atomic core only: claim QR + create attendance (remote DB needs higher timeout)
-  let record;
-  let usedSessionCode = existingSession.sessionCode;
-  const createdById = existingSession.createdById || null;
-
-  try {
-    const core = await prisma.$transaction(
-      async (tx) => {
-        const alreadyInTx = await tx.attendance.findFirst({
-          where: { studentId: student.id, date, sessionSlot },
-          select: { id: true },
-        });
-        if (alreadyInTx) {
-          throw new ApiError(
-            409,
-            `Your ${sessionSlot} attendance for today has already been marked.`,
-            'ATTENDANCE_ALREADY_MARKED'
-          );
-        }
-
-        const claimed = await tx.attendanceSession.updateMany({
-          where: {
-            id: sessionId,
-            status: 'ACTIVE',
-            tokenHash,
-            expiresAt: { gt: new Date() },
-          },
-          data: {
-            status: 'USED',
-            usedAt: markedAt,
-            usedByStudentId: student.id,
-            displayToken: null,
-          },
-        });
-
-        if (claimed.count !== 1) {
-          const fresh = await tx.attendanceSession.findUnique({ where: { id: sessionId } });
-          if (fresh?.status === 'USED') {
-            throw new ApiError(
-              409,
-              'This QR code has already been used. Please scan the new QR code.',
-              'QR_ALREADY_USED'
-            );
-          }
-          if (fresh?.status === 'EXPIRED') {
-            throw new ApiError(400, 'This attendance QR has expired.\nPlease scan the new QR.', 'QR_EXPIRED');
-          }
-          throw new ApiError(400, 'Please scan the new QR displayed by the admin.', 'QR_REPLACED');
-        }
-
-        try {
-          const created = await tx.attendance.create({
-            data: {
-              studentId: student.id,
-              attendanceSessionId: sessionId,
-              registrationId: student.registrationNumber,
-              date,
-              markedAt,
-              status: 'present',
-              sessionSlot,
-              source: 'live',
-              method: 'QR',
-              latitude: geo.latitude,
-              longitude: geo.longitude,
-              gpsAccuracy: geo.gpsAccuracy,
-              distanceFromAkhada: geo.distanceFromAkhada,
-              locationVerified: geo.locationVerified,
-            },
-          });
-          return { record: created };
-        } catch (err) {
-          if (err?.code === 'P2002') {
-            throw new ApiError(
-              409,
-              'Your attendance for today has already been marked.',
-              'ATTENDANCE_ALREADY_MARKED'
-            );
-          }
-          throw err;
-        }
-      },
-      { maxWait: 10000, timeout: 20000 }
-    );
-    record = core.record;
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw err;
-  }
-
-  // Non-critical follow-up work (outside the hot transaction)
-  try {
-    await refreshStudentAttendanceCounters(student.id);
-  } catch {
-    /* counters can refresh later */
-  }
-
-  let nextSession = null;
-  let nextToken = null;
-  try {
-    const created = await prisma.$transaction(
-      async (tx) => {
-        const active = await tx.attendanceSession.findFirst({ where: { status: 'ACTIVE' } });
-        if (active) {
-          return {
-            session: await tx.attendanceSession.findFirst({
-              where: { id: active.id },
-              include: { createdBy: { select: { id: true, name: true } } },
-            }),
-            rawToken: active.displayToken,
-          };
-        }
-        return createActiveSession(tx, { createdById });
-      },
-      { maxWait: 10000, timeout: 20000 }
-    );
-    nextSession = created.session;
-    nextToken = created.rawToken;
-  } catch {
-    /* Admin polling / ensureActiveSessionForDesk will mint the next QR */
-  }
-
-  const nextAssets =
-    nextSession && nextToken ? await buildQrAssets(nextSession, nextToken) : { qrPayload: null, qrDataUrl: null };
-
-  await writeAuditLog({
-    userId: req.user.id,
-    action: 'attendance_scan',
-    entity: 'attendance',
-    entityId: record.id,
-    details: {
-      usedSessionCode,
-      nextSessionCode: nextSession?.sessionCode,
-      registrationId: student.registrationNumber,
-    },
-    req,
-  });
-
-  res.status(201).json({
-    success: true,
-    message: 'Attendance Marked Successfully',
-    data: {
-      attendance: {
-        id: record.id,
-        studentName: student.fullName,
-        name: student.fullName,
-        type: 'Student',
-        registrationId: student.registrationNumber,
-        date: dateKey(date),
-        time: new Intl.DateTimeFormat('en-IN', {
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true,
-          timeZone: 'Asia/Kolkata',
-        }).format(markedAt),
-        status: 'Present',
-        method: 'QR',
-        source: 'QR',
-        sourceLabel: 'QR',
-        sessionCode: usedSessionCode,
-        distanceFromAkhada: geo.distanceFromAkhada,
-        distanceMeters: geo.distanceFromAkhada,
-        gpsAccuracy: geo.gpsAccuracy,
-        locationVerified: geo.locationVerified === true,
-        allowedRadiusMeters: geo.settings?.allowedRadiusMeters ?? null,
-      },
-      nextSession: nextSession ? publicSession(nextSession, nextAssets) : null,
-    },
-  });
 });
 
 export const markAttendanceStatus = asyncHandler(async (req, res) => {

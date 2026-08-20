@@ -6,7 +6,7 @@ import prisma from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { withId, withIds } from '../utils/serialize.js';
-import { deleteUploadedFile, toPublicPath, ENTRY_PHOTOS_DIR, ENTRY_DOCS_DIR, COACH_CERTS_DIR, ENTRY_EQUIPMENT_DIR, VIDEOS_DIR, QR_DIR } from '../middleware/upload.js';
+import { deleteUploadedFile, toPublicPath, UPLOADS_DIR, ENTRY_PHOTOS_DIR, ENTRY_DOCS_DIR, COACH_CERTS_DIR, ENTRY_EQUIPMENT_DIR, VIDEOS_DIR, QR_DIR } from '../middleware/upload.js';
 import ExcelJS from 'exceljs';
 import { centerCropSquareToJpg } from '../services/imageCropService.js';
 import { cell0 } from '../utils/zeroEmpty.js';
@@ -14,6 +14,127 @@ import { cell0 } from '../utils/zeroEmpty.js';
 const STRONG_PASSWORD = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 const MAX_PURCHASE_COST = new Prisma.Decimal('999999999999.99');
 const INT4_MAX = 2147483647;
+
+function isTruthyFlag(value) {
+  return value === true || value === 'true' || value === '1' || value === 'on' || value === 'yes';
+}
+
+function studentDocPublicPath(file) {
+  return file ? toPublicPath(file.filename, 'entry/documents') : null;
+}
+
+const STUDENT_DOC_SLOTS = [
+  { fileKey: 'aadhaarFront', imageKey: 'aadhaarFrontImage', removeKey: 'removeAadhaarFront' },
+  {
+    fileKey: 'aadhaarBack',
+    imageKey: 'aadhaarBackImage',
+    removeKey: 'removeAadhaarBack',
+    removeKeyAlt: 'removeAdditionalFile',
+  },
+  { fileKey: 'panCard', imageKey: 'panCardImage', removeKey: 'removePanCard' },
+  { fileKey: 'passport', imageKey: 'passportImage', removeKey: 'removePassport' },
+];
+
+const STUDENT_DOWNLOAD_SLOTS = {
+  aadhaarFront: { imageKey: 'aadhaarFrontImage', label: 'Aadhaar-Card' },
+  panCard: { imageKey: 'panCardImage', label: 'PAN-Card' },
+  passport: { imageKey: 'passportImage', label: 'Passport' },
+  additionalFile: { imageKey: 'aadhaarBackImage', label: 'Additional-File' },
+  aadhaarBack: { imageKey: 'aadhaarBackImage', label: 'Additional-File' },
+};
+
+function shapeStudentDocuments(doc) {
+  if (!doc) {
+    return {
+      aadhaarFrontImage: null,
+      aadhaarBackImage: null,
+      panCardImage: null,
+      passportImage: null,
+    };
+  }
+  return {
+    aadhaarFrontImage: doc.aadhaarFrontImage || doc.aadhaar_front_image || null,
+    aadhaarBackImage: doc.aadhaarBackImage || doc.aadhaar_back_image || null,
+    panCardImage: doc.panCardImage || doc.pan_card_image || null,
+    passportImage: doc.passportImage || doc.passport_image || null,
+  };
+}
+
+async function loadStudentDocumentImages(studentId) {
+  try {
+    const doc = await prisma.studentDocument.findUnique({ where: { studentId } });
+    const shaped = shapeStudentDocuments(doc);
+    if (shaped.aadhaarFrontImage || shaped.aadhaarBackImage || shaped.panCardImage || shaped.passportImage) {
+      return shaped;
+    }
+  } catch (err) {
+    console.warn('[students] document lookup failed:', err.message);
+  }
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT
+        aadhaar_front_image AS "aadhaarFrontImage",
+        aadhaar_back_image AS "aadhaarBackImage",
+        pan_card_image AS "panCardImage",
+        passport_image AS "passportImage"
+      FROM student_documents
+      WHERE student_id = ${studentId}
+      LIMIT 1
+    `;
+    return shapeStudentDocuments(Array.isArray(rows) ? rows[0] : null);
+  } catch (err) {
+    console.warn('[students] document SQL lookup failed:', err.message);
+    return shapeStudentDocuments(null);
+  }
+}
+
+async function sendStoredUpload(res, publicPath, downloadName) {
+  if (!publicPath) throw new ApiError(404, 'File not uploaded');
+  const relative = String(publicPath).replace(/^\/uploads\//, '').replace(/^uploads\//, '');
+  const full = path.join(UPLOADS_DIR, relative);
+  if (!fs.existsSync(full)) {
+    const { restoreFileFromDb } = await import('../utils/mediaBlobStore.js');
+    const restored = await restoreFileFromDb(publicPath);
+    if (!restored || !fs.existsSync(full)) throw new ApiError(404, 'File not found');
+  }
+  const ext = path.extname(full) || '';
+  const safeName = `${downloadName}${ext}`;
+  res.download(full, safeName);
+}
+
+async function upsertStudentDocuments(tx, studentId, files, body, existing) {
+  const next = {
+    aadhaarFrontImage: existing?.aadhaarFrontImage || null,
+    aadhaarBackImage: existing?.aadhaarBackImage || null,
+    panCardImage: existing?.panCardImage || null,
+    passportImage: existing?.passportImage || null,
+  };
+
+  for (const slot of STUDENT_DOC_SLOTS) {
+    const upload = files?.[slot.fileKey]?.[0];
+    if (upload) {
+      if (next[slot.imageKey]) deleteUploadedFile(next[slot.imageKey]);
+      next[slot.imageKey] = studentDocPublicPath(upload);
+      continue;
+    }
+    const remove =
+      isTruthyFlag(body?.[slot.removeKey]) ||
+      (slot.removeKeyAlt ? isTruthyFlag(body?.[slot.removeKeyAlt]) : false);
+    if (!remove) continue;
+    if (next[slot.imageKey]) deleteUploadedFile(next[slot.imageKey]);
+    next[slot.imageKey] = null;
+  }
+
+  if (existing?.id) {
+    return tx.studentDocument.update({
+      where: { studentId },
+      data: next,
+    });
+  }
+  return tx.studentDocument.create({
+    data: { studentId, ...next },
+  });
+}
 
 /** Money field — Prisma Decimal(14,2), never JS float. Returns string for safe PG binding. */
 function parsePurchaseCost(value) {
@@ -53,7 +174,7 @@ async function ensureStudentRole() {
       data: {
         name: 'Student',
         slug: 'student',
-        description: 'Student portal only — profile, QR scan and own attendance.',
+        description: 'Student portal only — profile and own attendance.',
         isSystem: true,
       },
     });
@@ -168,7 +289,7 @@ async function generateEquipmentCode() {
   return `${prefix}${String(next).padStart(4, '0')}`;
 }
 
-function assertUniqueAcrossTables({ aadhaarNumber, panNumber, mode }) {
+function assertUniqueAcrossTables({ aadhaarNumber, panNumber, mode, excludeStudentId, excludeCoachId }) {
   // mode: 'student' | 'coach'
   return Promise.all([
     aadhaarNumber ? prisma.student.findUnique({ where: { aadhaarNumber } }).catch(() => null) : Promise.resolve(null),
@@ -176,18 +297,34 @@ function assertUniqueAcrossTables({ aadhaarNumber, panNumber, mode }) {
     panNumber ? prisma.student.findUnique({ where: { panNumber } }).catch(() => null) : Promise.resolve(null),
     panNumber ? prisma.coach.findUnique({ where: { panNumber } }).catch(() => null) : Promise.resolve(null),
   ]).then(([sA, cA, sP, cP]) => {
+    const otherStudentAadhaar = sA && sA.id !== excludeStudentId;
+    const otherCoachAadhaar = cA && cA.id !== excludeCoachId;
+    const otherStudentPan = sP && sP.id !== excludeStudentId;
+    const otherCoachPan = cP && cP.id !== excludeCoachId;
     if (mode === 'student') {
-      if (sA) throw new ApiError(400, 'Aadhaar number already exists for another student');
-      if (cA) throw new ApiError(400, 'Aadhaar number already exists for another coach');
-      if (sP) throw new ApiError(400, 'PAN number already exists for another student');
-      if (cP) throw new ApiError(400, 'PAN number already exists for another coach');
+      if (otherStudentAadhaar) throw new ApiError(400, 'Aadhaar number already exists for another student');
+      if (otherCoachAadhaar) throw new ApiError(400, 'Aadhaar number already exists for another coach');
+      if (otherStudentPan) throw new ApiError(400, 'PAN number already exists for another student');
+      if (otherCoachPan) throw new ApiError(400, 'PAN number already exists for another coach');
     } else {
-      if (cA) throw new ApiError(400, 'Aadhaar number already exists for another coach');
-      if (sA) throw new ApiError(400, 'Aadhaar number already exists for another student');
-      if (cP) throw new ApiError(400, 'PAN number already exists for another coach');
-      if (sP) throw new ApiError(400, 'PAN number already exists for another student');
+      if (otherCoachAadhaar) throw new ApiError(400, 'Aadhaar number already exists for another coach');
+      if (otherStudentAadhaar) throw new ApiError(400, 'Aadhaar number already exists for another student');
+      if (otherCoachPan) throw new ApiError(400, 'PAN number already exists for another coach');
+      if (otherStudentPan) throw new ApiError(400, 'PAN number already exists for another student');
     }
   });
+}
+
+function normalizeStudentIdentity(aadhaarNumber, panNumber) {
+  const nextAadhaar = String(aadhaarNumber || '').replace(/\D/g, '') || null;
+  const nextPan = String(panNumber || '').trim().toUpperCase() || null;
+  if (nextAadhaar && !/^\d{12}$/.test(nextAadhaar)) {
+    throw new ApiError(400, 'Aadhaar must be exactly 12 digits');
+  }
+  if (nextPan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(nextPan)) {
+    throw new ApiError(400, 'PAN must be in format ABCDE1234F');
+  }
+  return { nextAadhaar, nextPan };
 }
 
 function buildExcelBuffer(rows, columns, sheetName = 'Export') {
@@ -310,16 +447,40 @@ export const getStudentById = asyncHandler(async (req, res) => {
   });
   if (!student) throw new ApiError(404, 'Student not found');
 
-  res.json({ success: true, data: { student: withId(student) } });
+  const studentDocuments = await loadStudentDocumentImages(student.id);
+
+  res.json({
+    success: true,
+    data: {
+      student: withId({
+        ...student,
+        fatherPhoto: student.fatherPhoto || student.parentPhoto || null,
+        motherPhoto: student.motherPhoto || null,
+        studentDocuments,
+      }),
+    },
+  });
+});
+
+export const downloadStudentDocument = asyncHandler(async (req, res) => {
+  const student = await prisma.student.findUnique({ where: { id: req.params.id } });
+  if (!student) throw new ApiError(404, 'Student not found');
+
+  const slotKey = String(req.params.slot || '').trim();
+  const slot = STUDENT_DOWNLOAD_SLOTS[slotKey];
+  if (!slot) throw new ApiError(400, 'Unknown document type');
+
+  const docs = await loadStudentDocumentImages(student.id);
+  const filePath = docs?.[slot.imageKey];
+  const label = `${student.registrationNumber}-${slot.label}`;
+  await sendStoredUpload(res, filePath, label);
 });
 
 export const createStudent = asyncHandler(async (req, res) => {
   const files = req.files || {};
   const photoUpload = files.photo?.[0];
-  const parentPhotoUpload = files.parentPhoto?.[0];
-  const aadhaarFrontUpload = files.aadhaarFront?.[0];
-  const aadhaarBackUpload = files.aadhaarBack?.[0];
-  const panCardUpload = files.panCard?.[0];
+  const fatherPhotoUpload = files.fatherPhoto?.[0];
+  const motherPhotoUpload = files.motherPhoto?.[0];
 
   if (!photoUpload) throw new ApiError(400, 'Student photo is required');
 
@@ -373,14 +534,14 @@ export const createStudent = asyncHandler(async (req, res) => {
 
   if (!fullName || !fatherName || !motherName) throw new ApiError(400, 'Missing student personal fields');
   if (!mobileNumber) throw new ApiError(400, 'Mobile number is required');
-  if (!aadhaarNumber || !panNumber) throw new ApiError(400, 'Aadhaar number and PAN number are required');
+  const { nextAadhaar, nextPan } = normalizeStudentIdentity(aadhaarNumber, panNumber);
   if (!password || !confirmPassword) throw new ApiError(400, 'Login password and confirm password are required');
   if (password !== confirmPassword) throw new ApiError(400, 'Passwords do not match');
   if (!STRONG_PASSWORD.test(password)) {
     throw new ApiError(400, 'Password must be 8+ characters with upper, lower and a number');
   }
 
-  await assertUniqueAcrossTables({ aadhaarNumber, panNumber, mode: 'student' });
+  await assertUniqueAcrossTables({ aadhaarNumber: nextAadhaar, panNumber: nextPan, mode: 'student' });
 
   const registrationNumber = await generateStudentRegNo();
   const username = String(loginUsername || registrationNumber).trim().toLowerCase();
@@ -396,15 +557,16 @@ export const createStudent = asyncHandler(async (req, res) => {
   const photo = await processEntryPhoto(photoUpload, {
     prefix: `student-${registrationNumber}`,
   });
-  const parentPhoto = parentPhotoUpload
-    ? await processEntryPhoto(parentPhotoUpload, {
-        prefix: `parent-${registrationNumber}`,
+  const fatherPhoto = fatherPhotoUpload
+    ? await processEntryPhoto(fatherPhotoUpload, {
+        prefix: `father-${registrationNumber}`,
       })
     : null;
-
-  const aadhaarFrontImage = aadhaarFrontUpload ? toPublicPath(aadhaarFrontUpload.filename, 'entry/documents') : null;
-  const aadhaarBackImage = aadhaarBackUpload ? toPublicPath(aadhaarBackUpload.filename, 'entry/documents') : null;
-  const panCardImage = panCardUpload ? toPublicPath(panCardUpload.filename, 'entry/documents') : null;
+  const motherPhoto = motherPhotoUpload
+    ? await processEntryPhoto(motherPhotoUpload, {
+        prefix: `mother-${registrationNumber}`,
+      })
+    : null;
 
   const qrCodePath = null;
   const studentRole = await ensureStudentRole();
@@ -433,11 +595,12 @@ export const createStudent = asyncHandler(async (req, res) => {
         state: state || null,
         pincode: pincode || null,
 
-        aadhaarNumber: String(aadhaarNumber).trim(),
-        panNumber: String(panNumber).trim(),
+        aadhaarNumber: nextAadhaar,
+        panNumber: nextPan,
 
         photo,
-        parentPhoto,
+        fatherPhoto,
+        motherPhoto,
         joiningDate: new Date(joiningDate),
         membershipType: membershipType || 'General',
         batch: batch || 'General',
@@ -470,14 +633,7 @@ export const createStudent = asyncHandler(async (req, res) => {
       },
     });
 
-    await tx.studentDocument.create({
-      data: {
-        studentId: student.id,
-        aadhaarFrontImage,
-        aadhaarBackImage,
-        panCardImage,
-      },
-    });
+    await upsertStudentDocuments(tx, student.id, files, req.body, null);
 
     await tx.user.create({
       data: {
@@ -516,15 +672,22 @@ export const updateStudent = asyncHandler(async (req, res) => {
 
   const files = req.files || {};
   const photoUpload = files.photo?.[0];
-  const parentPhotoUpload = files.parentPhoto?.[0];
-  const aadhaarFrontUpload = files.aadhaarFront?.[0];
-  const aadhaarBackUpload = files.aadhaarBack?.[0];
-  const panCardUpload = files.panCard?.[0];
+  const fatherPhotoUpload = files.fatherPhoto?.[0];
+  const motherPhotoUpload = files.motherPhoto?.[0];
 
-  const nextAadhaarNumber = req.body.aadhaarNumber ? String(req.body.aadhaarNumber).trim() : student.aadhaarNumber;
-  const nextPanNumber = req.body.panNumber ? String(req.body.panNumber).trim() : student.panNumber;
+  const parsedIdentity = normalizeStudentIdentity(
+    req.body.aadhaarNumber !== undefined ? req.body.aadhaarNumber : student.aadhaarNumber,
+    req.body.panNumber !== undefined ? req.body.panNumber : student.panNumber
+  );
+  const nextAadhaarNumber = req.body.aadhaarNumber !== undefined ? parsedIdentity.nextAadhaar : student.aadhaarNumber;
+  const nextPanNumber = req.body.panNumber !== undefined ? parsedIdentity.nextPan : student.panNumber;
   if (nextAadhaarNumber !== student.aadhaarNumber || nextPanNumber !== student.panNumber) {
-    await assertUniqueAcrossTables({ aadhaarNumber: nextAadhaarNumber, panNumber: nextPanNumber, mode: 'student' });
+    await assertUniqueAcrossTables({
+      aadhaarNumber: nextAadhaarNumber,
+      panNumber: nextPanNumber,
+      mode: 'student',
+      excludeStudentId: student.id,
+    });
   }
 
   let nextPhoto = student.photo;
@@ -535,11 +698,19 @@ export const updateStudent = asyncHandler(async (req, res) => {
     });
   }
 
-  let nextParentPhoto = student.parentPhoto;
-  if (parentPhotoUpload) {
-    nextParentPhoto = await processEntryPhoto(parentPhotoUpload, {
-      prefix: `parent-${student.registrationNumber}`,
-      oldPhotoPath: student.parentPhoto,
+  let nextFatherPhoto = student.fatherPhoto || student.parentPhoto;
+  if (fatherPhotoUpload) {
+    nextFatherPhoto = await processEntryPhoto(fatherPhotoUpload, {
+      prefix: `father-${student.registrationNumber}`,
+      oldPhotoPath: student.fatherPhoto || student.parentPhoto,
+    });
+  }
+
+  let nextMotherPhoto = student.motherPhoto;
+  if (motherPhotoUpload) {
+    nextMotherPhoto = await processEntryPhoto(motherPhotoUpload, {
+      prefix: `mother-${student.registrationNumber}`,
+      oldPhotoPath: student.motherPhoto,
     });
   }
 
@@ -549,31 +720,7 @@ export const updateStudent = asyncHandler(async (req, res) => {
 
   const updated = await prisma.$transaction(async (tx) => {
     const doc = await tx.studentDocument.findUnique({ where: { studentId: student.id } });
-    if (!doc) throw new ApiError(400, 'Student document record missing');
-
-    if (aadhaarFrontUpload) {
-      deleteUploadedFile(toPublicPath(doc.aadhaarFrontImage, 'entry/documents'));
-    }
-    if (aadhaarBackUpload) {
-      deleteUploadedFile(toPublicPath(doc.aadhaarBackImage, 'entry/documents'));
-    }
-    if (panCardUpload) {
-      deleteUploadedFile(toPublicPath(doc.panCardImage, 'entry/documents'));
-    }
-
-    if (aadhaarFrontUpload)
-      doc.aadhaarFrontImage = toPublicPath(aadhaarFrontUpload.filename, 'entry/documents');
-    if (aadhaarBackUpload) doc.aadhaarBackImage = toPublicPath(aadhaarBackUpload.filename, 'entry/documents');
-    if (panCardUpload) doc.panCardImage = toPublicPath(panCardUpload.filename, 'entry/documents');
-
-    await tx.studentDocument.update({
-      where: { studentId: student.id },
-      data: {
-        aadhaarFrontImage: doc.aadhaarFrontImage,
-        aadhaarBackImage: doc.aadhaarBackImage,
-        panCardImage: doc.panCardImage,
-      },
-    });
+    await upsertStudentDocuments(tx, student.id, files, req.body, doc);
 
     const next = await tx.student.update({
       where: { id: student.id },
@@ -598,7 +745,8 @@ export const updateStudent = asyncHandler(async (req, res) => {
         aadhaarNumber: nextAadhaarNumber,
         panNumber: nextPanNumber,
         photo: nextPhoto,
-        parentPhoto: nextParentPhoto,
+        fatherPhoto: nextFatherPhoto,
+        motherPhoto: nextMotherPhoto,
 
         joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : student.joiningDate,
         membershipType: req.body.membershipType !== undefined ? req.body.membershipType || 'General' : student.membershipType,
@@ -715,6 +863,8 @@ export const deleteStudent = asyncHandler(async (req, res) => {
 
   if (student.photo) deleteUploadedFile(student.photo);
   if (student.parentPhoto) deleteUploadedFile(student.parentPhoto);
+  if (student.fatherPhoto) deleteUploadedFile(student.fatherPhoto);
+  if (student.motherPhoto) deleteUploadedFile(student.motherPhoto);
   if (student.qrCodePath) deleteUploadedFile(student.qrCodePath);
 
   res.json({ success: true, message: 'Student deleted' });
